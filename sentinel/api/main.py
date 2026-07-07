@@ -72,13 +72,14 @@ def create_app() -> FastAPI:
 
 def _register_routers(app: FastAPI) -> None:
     """Attach feature routers. Each phase adds routers here."""
-    from sentinel.api.routers import context, portfolio, providers, risk, system
+    from sentinel.api.routers import context, pipeline, portfolio, providers, risk, system
 
     app.include_router(providers.router)
     app.include_router(system.router)
     app.include_router(context.router)
     app.include_router(portfolio.router)
     app.include_router(risk.router)
+    app.include_router(pipeline.router)
 
 
 def _mount_spa(app: FastAPI) -> None:
