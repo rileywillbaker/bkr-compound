@@ -147,6 +147,14 @@ def test_golden_run_produces_approved_buy(seeded, llm_ok):
     assert len(run_events) == 1
     assert run_events[0].payload["regime"] == "bull-trend"
 
+    # the signal + its full risk check are persisted (Phase 4)
+    from sentinel.db.models import RiskCheckRow, SignalRow
+
+    row = seeded.get(SignalRow, str(signal.id))
+    assert row is not None and row.run_id == str(state.run_id)
+    checks = seeded.execute(select(RiskCheckRow)).scalars().all()
+    assert len(checks) == 1 and checks[0].approved and len(checks[0].rules) == 11
+
 
 def test_earnings_blackout_vetoes_buy(seeded, llm_ok):
     seeded.add(

@@ -185,6 +185,81 @@ class RiskProfileRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
 
 
+# --------------------------------------------------------------------------
+# Phase 4 — signal lifecycle + alerts
+# --------------------------------------------------------------------------
+class SignalRow(Base):
+    """Persisted pipeline signals (spec §4 schema). Numeric fields were
+    computed deterministically before this row was written; the LLM only ever
+    contributed the explanation text and evidence citations."""
+
+    __tablename__ = "signals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=UTCNow, index=True
+    )
+    run_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    ticker: Mapped[str] = mapped_column(String(12), index=True)
+    action: Mapped[str] = mapped_column(String(8), index=True)
+    shares: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_entry_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float)
+    expected_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_score: Mapped[int] = mapped_column(Integer)
+    time_horizon: Mapped[str] = mapped_column(String(16))
+    strategy: Mapped[str] = mapped_column(String(32), index=True)
+    regime: Mapped[str] = mapped_column(String(24), index=True)
+    evidence: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    deterministic_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    alert_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_decision: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RiskCheckRow(Base):
+    """Full rule-by-rule risk evaluation for a signal (spec §5: rejections are
+    stored and visible; approvals too, for the audit trail)."""
+
+    __tablename__ = "risk_checks"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[str] = mapped_column(String(36), index=True)
+    approved: Mapped[bool] = mapped_column(Boolean, index=True)
+    profile_version: Mapped[int] = mapped_column(Integer)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    rules: Mapped[list] = mapped_column(JSON)
+
+
+class AlertRow(Base):
+    """Outbound alert log: signal alerts, briefs, test sends. Also the source
+    of the max-alerts-per-day rate limit."""
+
+    __tablename__ = "alerts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow, index=True)
+    kind: Mapped[str] = mapped_column(String(24), index=True)  # signal/brief_*/test
+    channel: Mapped[str] = mapped_column(String(16), default="telegram")
+    signal_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    detail: Mapped[str] = mapped_column(Text, default="")  # error info when not ok
+
+
+class JournalEntryRow(Base):
+    """Trade journal, auto-created from signals + user decisions (spec §7.5);
+    free-text notes are user-editable."""
+
+    __tablename__ = "journal_entries"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow, index=True)
+    signal_id: Mapped[str] = mapped_column(String(36), index=True)
+    ticker: Mapped[str] = mapped_column(String(12), index=True)
+    decision: Mapped[str] = mapped_column(String(12))
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
 class ApiUsage(Base):
     """Cost meter: one row per external call (LLM or data API)."""
 

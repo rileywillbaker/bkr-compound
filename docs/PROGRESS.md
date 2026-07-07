@@ -8,7 +8,7 @@ Phase status per `claude-code-master-prompt.md` §10.
 | 1 | Data layer: providers, ingestion, scheduler, watchdog | **done** (live-key verification deferred until keys pasted) |
 | 2 | Risk engine + portfolio | **done** |
 | 3 | Agent pipeline (LangGraph) | **done** (options-flow analyst is a stub per spec — paid data upgrade path documented in its docstring) |
-| 4 | Alerts + signal lifecycle | pending |
+| 4 | Alerts + signal lifecycle | **done** (live Telegram send untested until the user pastes bot credentials — use `POST /api/alerts/test`) |
 | 5 | Web app | pending |
 | 6 | Evaluation loop + paper harness | pending |
 | 7 | Hardening | pending |
@@ -32,3 +32,11 @@ Phase status per `claude-code-master-prompt.md` §10.
   confidence (neutral hit-rate prior until Phase 6), `POST /api/pipeline/run`.
   End-to-end tests run with mocked LLM (happy path, earnings-blackout veto,
   LLM-outage degradation). Signal DB persistence + alerts are Phase 4.
+- 2026-07-07 — Phase 4 landed: signals/risk_checks/alerts/journal_entries
+  tables (migration 0004), signal persistence in the runner, user decision
+  capture (auto journal entries), Telegram channel with spec §6 message
+  format, alert router (BUY/SELL + approved + confidence ≥ 0.80, max 5/day),
+  pre-open/post-close briefs on the existing scheduler hooks, ops alerts for
+  watchdog/pipeline failures, `/api/signals` + `/api/alerts` routers.
+  Telegram is mocked in tests; live send needs bot_token/chat_id pasted in
+  Settings (validate via `POST /api/providers/telegram/test`).

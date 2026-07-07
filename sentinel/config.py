@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     starting_equity: float = Field(default=10_000, gt=0)
     watchlist: str = "SPY,QQQ,NVDA,AAPL,MSFT"
 
+    # --- alerting (spec §6) ---
+    alert_confidence_threshold: float = Field(default=0.80, ge=0, le=1)
+    max_alerts_per_day: int = Field(default=5, ge=0)
+
     # --- LLM budget ---
     llm_daily_token_budget: int = 2_000_000
 
