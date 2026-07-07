@@ -125,7 +125,22 @@ python -m venv .venv
 docker compose --profile dev up frontend
 ```
 
-## 7. Troubleshooting
+## 7. Backups
+
+Daily database dumps with 14-dump retention:
+
+```powershell
+# Windows: run once to test, then schedule daily
+powershell -NoProfile -File scripts\backup.ps1
+schtasks /Create /SC DAILY /ST 23:30 /TN "B-Quant backup" `
+  /TR "powershell -NoProfile -File $PWD\scripts\backup.ps1"
+```
+
+On a Linux VPS use `scripts/backup.sh` via cron. Test a restore once —
+see the restore command at the bottom of either script. Before going
+always-on, walk through `docs/PRODUCTION_CHECKLIST.md`.
+
+## 8. Troubleshooting
 
 - **API container unhealthy** — `docker compose logs api`. Most common cause:
   missing `.env` or a migration failure.

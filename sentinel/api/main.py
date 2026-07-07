@@ -38,6 +38,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    from sentinel.api.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
+
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RateLimitMiddleware)
     if settings.is_dev:
         app.add_middleware(
             CORSMiddleware,

@@ -1,12 +1,21 @@
 name: b-quant
 
+# Log rotation for every service (json-file caps; docker's default is
+# unbounded and will eventually fill the disk on an always-on box).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: timescale/timescaledb:latest-pg16
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: bquant
-      POSTGRES_PASSWORD: bquant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bquant}
       POSTGRES_DB: bquant
     volumes:
       - db_data:/var/lib/postgresql/data
@@ -21,6 +30,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -34,9 +44,10 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://bquant:bquant@db:5432/bquant
+      DATABASE_URL: postgresql+psycopg://bquant:${POSTGRES_PASSWORD:-bquant}@db:5432/bquant
       REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
@@ -60,9 +71,10 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://bquant:bquant@db:5432/bquant
+      DATABASE_URL: postgresql+psycopg://bquant:${POSTGRES_PASSWORD:-bquant}@db:5432/bquant
       REDIS_URL: redis://redis:6379/0
     depends_on:
       api:

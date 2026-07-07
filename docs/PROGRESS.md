@@ -11,7 +11,7 @@ Phase status per `claude-code-master-prompt.md` §10.
 | 4 | Alerts + signal lifecycle | **done** (live Telegram send untested until the user pastes bot credentials — use `POST /api/alerts/test`) |
 | 5 | Web app | **done** (Analytics outcome stats show empty state until Phase 6 resolves signals) |
 | 6 | Evaluation loop + paper harness | **done** (fill sanity-checking is the deterministic bar-walk simulator; no brokerage order endpoints exist, live or paper) |
-| 7 | Hardening | pending |
+| 7 | Hardening | **done** |
 
 ## Notes
 
@@ -61,3 +61,9 @@ Phase status per `claude-code-master-prompt.md` §10.
   table. Spec's "optional Alpaca paper mirror" intentionally satisfied by
   the internal bar-walk fill simulator instead — CLAUDE.md's hard rule is
   no order endpoints of any kind. Risk limits are never auto-tuned.
+- 2026-07-07 — Phase 7 landed: compose log rotation (10MB×5 per service) +
+  configurable POSTGRES_PASSWORD; pg_dump backup scripts (Windows + Linux,
+  14-dump retention, restore reference); API rate limit (240 req/min/client
+  on /api) + security headers middleware; docs/PRODUCTION_CHECKLIST.md;
+  SETUP.md backup section. Remaining: final end-to-end verification needs
+  Docker Desktop installed by the user (containers, hypertables, live keys).
