@@ -139,6 +139,52 @@ class SystemEvent(Base):
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
+# --------------------------------------------------------------------------
+# Phase 2 — portfolio + risk
+# --------------------------------------------------------------------------
+class Position(Base):
+    """Current holdings, maintained from user-entered trades."""
+
+    __tablename__ = "positions"
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    shares: Mapped[int] = mapped_column(Integer, default=0)
+    cost_basis: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=0)  # per share
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
+class TradeRow(Base):
+    """User-entered fills (manual). The system never creates these itself."""
+
+    __tablename__ = "trades"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow, index=True)
+    symbol: Mapped[str] = mapped_column(String(12), index=True)
+    side: Mapped[str] = mapped_column(String(4))  # BUY / SELL
+    shares: Mapped[int] = mapped_column(Integer)
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    signal_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
+class EquitySnapshot(Base):
+    """Point-in-time account equity; source of high-water mark and day P&L."""
+
+    __tablename__ = "equity_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow, index=True)
+    equity: Mapped[float] = mapped_column(Float)
+
+
+class RiskProfileRow(Base):
+    """Versioned risk profiles (append-only; newest version is active)."""
+
+    __tablename__ = "risk_profiles"
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    params: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
 class ApiUsage(Base):
     """Cost meter: one row per external call (LLM or data API)."""
 
