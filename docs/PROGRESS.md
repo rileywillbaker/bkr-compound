@@ -4,8 +4,8 @@ Phase status per `claude-code-master-prompt.md` §10.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Skeleton: repo, compose, config, Alembic, health, CI | **in progress** |
-| 1 | Data layer: providers, ingestion, scheduler, watchdog | pending |
+| 0 | Skeleton: repo, compose, config, Alembic, health, CI | **done** (container run deferred until Docker Desktop installed) |
+| 1 | Data layer: providers, ingestion, scheduler, watchdog | **done** (live-key verification deferred until keys pasted) |
 | 2 | Risk engine + portfolio | pending |
 | 3 | Agent pipeline (LangGraph) | pending |
 | 4 | Alerts + signal lifecycle | pending |
