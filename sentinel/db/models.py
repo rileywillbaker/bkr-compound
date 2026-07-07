@@ -1,0 +1,154 @@
+"""SQLAlchemy models (spec §8). Tables are added phase by phase; all
+timestamps are stored UTC (timestamptz)."""
+
+from datetime import date, datetime
+from decimal import Decimal
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from sentinel.db.base import Base
+
+UTCNow = lambda: datetime.utcnow()  # noqa: E731
+
+
+# --------------------------------------------------------------------------
+# Phase 1 — market/reference data
+# --------------------------------------------------------------------------
+class BarRow(Base):
+    """OHLCV bars. Converted to a Timescale hypertable in the migration."""
+
+    __tablename__ = "bars"
+    # Hypertables need the partition column in every unique constraint,
+    # so the primary key is composite and there is no surrogate id.
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    timeframe: Mapped[str] = mapped_column(String(8), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    open: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    high: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    low: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    close: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    volume: Mapped[int] = mapped_column(BigInteger)
+
+
+class QuoteLatest(Base):
+    __tablename__ = "quotes_latest"
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    bid: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    ask: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    last: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+
+
+class NewsItemRow(Base):
+    __tablename__ = "news_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider_id: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str | None] = mapped_column(String(12), index=True, nullable=True)
+    headline: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(128), default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    __table_args__ = (UniqueConstraint("provider_id", "symbol", name="uq_news_provider_symbol"),)
+
+
+class MacroSeriesRow(Base):
+    __tablename__ = "macro_series"
+    series_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
+class FundamentalsRow(Base):
+    __tablename__ = "fundamentals"
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    sector: Mapped[str] = mapped_column(String(128), default="", index=True)
+    market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exchange: Mapped[str] = mapped_column(String(32), default="")
+    pe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eps_growth_ttm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revenue_growth_ttm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    beta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    week52_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    week52_low: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class EarningsCalendarRow(Base):
+    __tablename__ = "earnings_calendar"
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    hour: Mapped[str] = mapped_column(String(8), default="")
+    eps_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eps_actual: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revenue_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revenue_actual: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
+class FilingRow(Base):
+    __tablename__ = "filings"
+    accession_no: Mapped[str] = mapped_column(String(32), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(12), index=True)
+    cik: Mapped[str] = mapped_column(String(16), index=True)
+    form: Mapped[str] = mapped_column(String(12), index=True)
+    filed_at: Mapped[date] = mapped_column(Date, index=True)
+    url: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
+class ProviderCredential(Base):
+    """Encrypted external API keys pasted via the Settings UI (spec addition)."""
+
+    __tablename__ = "provider_credentials"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    field: Mapped[str] = mapped_column(String(32))
+    encrypted_value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    __table_args__ = (UniqueConstraint("provider", "field", name="uq_credential"),)
+
+
+class SystemEvent(Base):
+    """Audit/ops log: ingestion runs, watchdog alerts, provider errors."""
+
+    __tablename__ = "system_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow, index=True)
+    level: Mapped[str] = mapped_column(String(8), default="INFO")  # INFO/WARN/ERROR
+    kind: Mapped[str] = mapped_column(String(64), index=True)  # e.g. ingest.bars
+    message: Mapped[str] = mapped_column(Text, default="")
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class ApiUsage(Base):
+    """Cost meter: one row per external call (LLM or data API)."""
+
+    __tablename__ = "api_usage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow, index=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    endpoint: Mapped[str] = mapped_column(String(128), default="")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    detail: Mapped[str] = mapped_column(Text, default="")

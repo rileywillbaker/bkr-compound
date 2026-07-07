@@ -1,0 +1,39 @@
+# LiteLLM model routing. Models are NEVER hardcoded in Python — every LLM call
+# resolves its model through a role defined here. Swap providers by editing
+# this file only.
+#
+# Roles:
+#   reasoning : synthesis, strategy tie-breaks, explanations, chat
+#   triage    : news screening, cheap classification
+#
+# To use a local Ollama fallback, uncomment the ollama entries and set
+# `active` accordingly. No code changes required.
+
+roles:
+  reasoning:
+    active: anthropic-reasoning
+    candidates:
+      anthropic-reasoning:
+        model: anthropic/claude-sonnet-4-6
+        max_tokens: 4096
+      # ollama-reasoning:
+      #   model: ollama/llama3.1:70b
+      #   api_base: http://localhost:11434
+      #   max_tokens: 4096
+
+  triage:
+    active: anthropic-triage
+    candidates:
+      anthropic-triage:
+        model: anthropic/claude-haiku-4-5
+        max_tokens: 1024
+      # ollama-triage:
+      #   model: ollama/llama3.1:8b
+      #   api_base: http://localhost:11434
+      #   max_tokens: 1024
+
+# Global LLM call policy
+policy:
+  request_timeout_seconds: 60
+  max_retries: 3
+  retry_backoff_base_seconds: 2
