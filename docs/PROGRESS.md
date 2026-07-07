@@ -67,3 +67,11 @@ Phase status per `claude-code-master-prompt.md` §10.
   on /api) + security headers middleware; docs/PRODUCTION_CHECKLIST.md;
   SETUP.md backup section. Remaining: final end-to-end verification needs
   Docker Desktop installed by the user (containers, hypertables, live keys).
+- 2026-07-07 — Pre-Docker smoke test: booted the real app (SQLite, TestClient)
+  serving the real built SPA — 14/14 checks passed (health, SPA, auth,
+  settings, encrypted+masked credentials, risk profile, manual trade +
+  valuation, analytics, clean empty pipeline scan with no data, WebSocket
+  feed, disclaimers). Still pending for full sign-off (user action first):
+  1) install Docker Desktop → `docker compose up --build` → verify
+     migrations/hypertables/health; 2) paste real API keys in onboarding →
+     Test buttons green → live ingest; 3) live Telegram test message.
