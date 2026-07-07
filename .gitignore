@@ -30,3 +30,5 @@ Thumbs.db
 # Local data
 backups/
 logs/
+
+frontend/tsconfig.tsbuildinfo
