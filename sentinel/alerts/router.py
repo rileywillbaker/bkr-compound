@@ -29,6 +29,21 @@ log = structlog.get_logger()
 ET = ZoneInfo("America/New_York")
 
 
+def in_quiet_hours(db: Session, now: datetime | None = None) -> bool:
+    """User-set quiet hours (Settings, ET). Signal alerts are suppressed and
+    recorded as skipped; ops alerts still go through."""
+    from sentinel.db.settings_store import QUIET_HOURS_KEY, get_setting
+
+    window = get_setting(db, QUIET_HOURS_KEY)
+    if not isinstance(window, dict) or "start" not in window or "end" not in window:
+        return False
+    hhmm = (now or datetime.now(ET)).astimezone(ET).strftime("%H:%M")
+    start, end = window["start"], window["end"]
+    if start <= end:
+        return start <= hhmm < end
+    return hhmm >= start or hhmm < end  # overnight window, e.g. 22:00–07:00
+
+
 def alerts_sent_today(db: Session, kind: str = "signal") -> int:
     """Count successful alerts since ET midnight (the user's trading day)."""
     et_midnight = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -77,6 +92,9 @@ def route_signal_alerts(db: Session, signals: list[Signal]) -> int:
         return 0
     if not telegram_configured(db):
         log.info("alerts skipped: telegram not configured", eligible=len(eligible))
+        return 0
+    if in_quiet_hours(db):
+        log.info("alerts suppressed: quiet hours", eligible=len(eligible))
         return 0
 
     sent = 0

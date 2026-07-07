@@ -98,7 +98,20 @@ The SEC requires a descriptive User-Agent containing contact info. Set
 `EDGAR_USER_AGENT` in `.env` (or the Settings UI) to something like
 `B-Quant/0.1 (you@example.com)`.
 
-## 5. Development workflow
+## 5. Login & remote access
+
+- On your local network (default), no login is required (`APP_ENV=dev`).
+- To require the session login, set `APP_ENV=prod` and a strong
+  `APP_PASSWORD` in `.env`, then restart the stack. All API routes then
+  return 401 until you sign in through the web login page.
+- **Never expose the app to the internet over plain HTTP.** For remote
+  access, put a TLS reverse proxy in front (Caddy is the simplest:
+  `caddy reverse-proxy --from your.domain.com --to localhost:8000`), or use
+  a VPN/Tailscale to reach your home network instead of exposing a port.
+- API keys never leave the server; the browser only ever sees masked
+  previews.
+
+## 6. Development workflow
 
 ```powershell
 # Python
@@ -112,7 +125,7 @@ python -m venv .venv
 docker compose --profile dev up frontend
 ```
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 - **API container unhealthy** — `docker compose logs api`. Most common cause:
   missing `.env` or a migration failure.

@@ -12,7 +12,6 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from sentinel.config import get_settings
 from sentinel.db.models import BarRow, EquitySnapshot, FundamentalsRow, Position, QuoteLatest
 from sentinel.risk.engine import PortfolioState, PositionState
 
@@ -37,8 +36,9 @@ def _mark_price(db: Session, symbol: str, fallback: float) -> float:
 def cash_balance(db: Session) -> float:
     """Cash = starting equity + realized proceeds - purchases (from trades)."""
     from sentinel.db.models import TradeRow
+    from sentinel.db.settings_store import get_starting_equity
 
-    cash = get_settings().starting_equity
+    cash = get_starting_equity(db)
     for trade in db.execute(select(TradeRow)).scalars():
         signed = -1 if trade.side == "BUY" else 1
         cash += signed * trade.shares * float(trade.price)

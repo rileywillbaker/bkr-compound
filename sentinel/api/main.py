@@ -4,20 +4,29 @@ Serves the JSON API under /api, the WebSocket feed under /ws, health probes
 under /health, and (in prod images) the built React SPA from frontend/dist.
 """
 
+import threading
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from sentinel import DISCLAIMER, __version__
+from sentinel.api.auth import require_auth
 from sentinel.config import PROJECT_ROOT, get_settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from sentinel.data.bus import start_redis_relay
+
+    stop = threading.Event()
+    relay = start_redis_relay(stop)
     yield
+    stop.set()
+    if relay is not None:
+        relay.join(timeout=3)
 
 
 def create_app() -> FastAPI:
@@ -71,9 +80,15 @@ def create_app() -> FastAPI:
 
 
 def _register_routers(app: FastAPI) -> None:
-    """Attach feature routers. Each phase adds routers here."""
+    """Attach feature routers. Each phase adds routers here. Everything except
+    auth itself and /health sits behind the session-auth guard (a no-op in
+    dev/local-network mode — see sentinel/api/auth.py)."""
+    from sentinel.api import auth, ws
     from sentinel.api.routers import (
         alerts,
+        analytics,
+        app_settings,
+        chat,
         context,
         pipeline,
         portfolio,
@@ -83,14 +98,23 @@ def _register_routers(app: FastAPI) -> None:
         system,
     )
 
-    app.include_router(providers.router)
-    app.include_router(system.router)
-    app.include_router(context.router)
-    app.include_router(portfolio.router)
-    app.include_router(risk.router)
-    app.include_router(pipeline.router)
-    app.include_router(signals.router)
-    app.include_router(alerts.router)
+    app.include_router(auth.router)
+    guard = [Depends(require_auth)]
+    for module in (
+        providers,
+        system,
+        context,
+        portfolio,
+        risk,
+        pipeline,
+        signals,
+        alerts,
+        chat,
+        analytics,
+        app_settings,
+    ):
+        app.include_router(module.router, dependencies=guard)
+    app.include_router(ws.router)
 
 
 def _mount_spa(app: FastAPI) -> None:

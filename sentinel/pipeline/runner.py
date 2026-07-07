@@ -10,8 +10,9 @@ import structlog
 from sqlalchemy.orm import Session
 
 from sentinel.alerts.router import route_signal_alerts, send_ops_alert
-from sentinel.config import get_settings
+from sentinel.data.bus import publish
 from sentinel.db.models import SystemEvent
+from sentinel.db.settings_store import get_watchlist
 from sentinel.pipeline.graph import build_graph
 from sentinel.pipeline.persist import save_signals
 from sentinel.pipeline.state import PipelineState
@@ -29,7 +30,7 @@ def run_scan(
     db: Session, symbols: list[str] | None = None, use_llm: bool = True
 ) -> PipelineState:
     global _last_run
-    symbols = symbols or get_settings().watchlist_symbols
+    symbols = symbols or get_watchlist(db)
     initial = PipelineState(symbols=symbols, use_llm=use_llm)
     graph = build_graph(db)
     try:
@@ -51,6 +52,21 @@ def run_scan(
         raise
     save_signals(db, result)
     alerts_sent = route_signal_alerts(db, result.signals)
+    for signal in result.signals:
+        with contextlib.suppress(Exception):
+            publish(
+                "signal",
+                {
+                    "id": str(signal.id),
+                    "ticker": signal.ticker,
+                    "action": signal.action,
+                    "confidence": signal.confidence,
+                    "strategy": signal.strategy,
+                    "regime": signal.regime,
+                    "approved": bool(signal.risk_check and signal.risk_check.approved),
+                    "deterministic_only": signal.deterministic_only,
+                },
+            )
     actionable = [s for s in result.signals if s.actionable]
     rejected = [
         s

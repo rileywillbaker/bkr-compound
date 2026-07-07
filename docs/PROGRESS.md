@@ -9,7 +9,7 @@ Phase status per `claude-code-master-prompt.md` §10.
 | 2 | Risk engine + portfolio | **done** |
 | 3 | Agent pipeline (LangGraph) | **done** (options-flow analyst is a stub per spec — paid data upgrade path documented in its docstring) |
 | 4 | Alerts + signal lifecycle | **done** (live Telegram send untested until the user pastes bot credentials — use `POST /api/alerts/test`) |
-| 5 | Web app | pending |
+| 5 | Web app | **done** (Analytics outcome stats show empty state until Phase 6 resolves signals) |
 | 6 | Evaluation loop + paper harness | pending |
 | 7 | Hardening | pending |
 
@@ -40,3 +40,14 @@ Phase status per `claude-code-master-prompt.md` §10.
   watchdog/pipeline failures, `/api/signals` + `/api/alerts` routers.
   Telegram is mocked in tests; live send needs bot_token/chat_id pasted in
   Settings (validate via `POST /api/providers/telegram/test`).
+- 2026-07-07 — Phase 5 landed: chat assistant (read-only tools; single-ticker
+  analysis runs the real pipeline through the risk gate), `/ws` live feed
+  (Redis pub/sub relay + in-process bus), session auth (enforced when
+  APP_ENV=prod), app_settings store (watchlist/equity/quiet-hours/onboarding,
+  migration 0005), quiet-hours alert suppression, analytics summary endpoint,
+  and the full React SPA: onboarding wizard with per-provider signup
+  instructions + paste-key + Test buttons, Dashboard, Chat, Signals (live,
+  expandable risk-check table, taken/skipped/modified), Portfolio, Journal,
+  Analytics, Settings (versioned risk-profile editor, watchlist, keys),
+  System (provider health, cost meter, event log). Disclaimer on every
+  surface. `npm run build` clean; 172 tests green; ruff/mypy clean.

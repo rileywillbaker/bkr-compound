@@ -260,6 +260,34 @@ class JournalEntryRow(Base):
     note: Mapped[str] = mapped_column(Text, default="")
 
 
+# --------------------------------------------------------------------------
+# Phase 5 — web app
+# --------------------------------------------------------------------------
+class ChatMessageRow(Base):
+    """Chat transcript (spec §8 chat_messages). Tool calls the assistant made
+    are recorded for auditability; chat can never bypass the risk engine."""
+
+    __tablename__ = "chat_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow, index=True)
+    role: Mapped[str] = mapped_column(String(12))  # user | assistant | tool
+    content: Mapped[str] = mapped_column(Text, default="")
+    tool_name: Mapped[str | None] = mapped_column(String(48), nullable=True)
+
+
+class AppSettingRow(Base):
+    """Key-value app settings editable in the UI (watchlist, quiet hours,
+    onboarding flag). Bootstrap secrets stay in .env; provider keys live in
+    provider_credentials."""
+
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=UTCNow, onupdate=UTCNow
+    )
+
+
 class ApiUsage(Base):
     """Cost meter: one row per external call (LLM or data API)."""
 
