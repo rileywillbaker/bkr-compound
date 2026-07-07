@@ -103,7 +103,7 @@ def synthesize_signal(
         # no valid position exists at current risk budget -> stand aside
         action = "NO_TRADE"
 
-    hit_rate = strategy_hit_rate(db, fit.strategy)
+    hit_rate = strategy_hit_rate(db, fit.strategy, regime=regime.regime)
     confidence = compute_confidence(candidate.verdicts, fit.score, hit_rate)
     atr_pct = snap.atr_pct if snap else None
     close = snap.close if snap else 0.0

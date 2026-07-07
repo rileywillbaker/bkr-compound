@@ -261,6 +261,49 @@ class JournalEntryRow(Base):
 
 
 # --------------------------------------------------------------------------
+# Phase 6 — evaluation loop
+# --------------------------------------------------------------------------
+class EvaluationRow(Base):
+    """Resolved-signal outcome (spec §9). Every BUY signal with full trade
+    parameters resolves exactly once — including ones the user skipped, so
+    missed opportunities and false positives are both measured."""
+
+    __tablename__ = "evaluations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    ticker: Mapped[str] = mapped_column(String(12), index=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    outcome: Mapped[str] = mapped_column(String(16), index=True)  # target_hit|stop_hit|expired
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_price: Mapped[float] = mapped_column(Float)
+    r_multiple: Mapped[float] = mapped_column(Float)
+    return_pct: Mapped[float] = mapped_column(Float)
+    win: Mapped[bool] = mapped_column(Boolean, index=True)
+    holding_days: Mapped[int] = mapped_column(Integer)
+    confidence: Mapped[float] = mapped_column(Float)  # denormalized for Brier
+    strategy: Mapped[str] = mapped_column(String(32), index=True)
+    regime: Mapped[str] = mapped_column(String(24), index=True)
+    user_decision: Mapped[str | None] = mapped_column(String(12), nullable=True)
+
+
+class StrategyStatRow(Base):
+    """Nightly-recomputed per-strategy/per-regime aggregates (spec §8/§9).
+    Feed synthesizer confidence + selector priors; risk limits are NEVER
+    auto-tuned from these."""
+
+    __tablename__ = "strategy_stats"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy: Mapped[str] = mapped_column(String(32), index=True)
+    regime: Mapped[str] = mapped_column(String(24), default="*", index=True)  # "*" = all
+    resolved_count: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    expectancy_r: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    __table_args__ = (UniqueConstraint("strategy", "regime", name="uq_strategy_regime"),)
+
+
+# --------------------------------------------------------------------------
 # Phase 5 — web app
 # --------------------------------------------------------------------------
 class ChatMessageRow(Base):

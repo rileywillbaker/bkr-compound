@@ -10,7 +10,7 @@ Phase status per `claude-code-master-prompt.md` §10.
 | 3 | Agent pipeline (LangGraph) | **done** (options-flow analyst is a stub per spec — paid data upgrade path documented in its docstring) |
 | 4 | Alerts + signal lifecycle | **done** (live Telegram send untested until the user pastes bot credentials — use `POST /api/alerts/test`) |
 | 5 | Web app | **done** (Analytics outcome stats show empty state until Phase 6 resolves signals) |
-| 6 | Evaluation loop + paper harness | pending |
+| 6 | Evaluation loop + paper harness | **done** (fill sanity-checking is the deterministic bar-walk simulator; no brokerage order endpoints exist, live or paper) |
 | 7 | Hardening | pending |
 
 ## Notes
@@ -51,3 +51,13 @@ Phase status per `claude-code-master-prompt.md` §10.
   Analytics, Settings (versioned risk-profile editor, watchlist, keys),
   System (provider health, cost meter, event log). Disclaimer on every
   surface. `npm run build` clean; 172 tests green; ruff/mypy clean.
+- 2026-07-07 — Phase 6 landed: evaluations + strategy_stats tables (migration
+  0006), nightly resolution (02:00 ET job) walking daily bars with a
+  pessimistic stop-first tie-break; skipped signals resolve too (missed-
+  opportunity log); Brier score + calibration buckets + Sharpe/Sortino;
+  per-strategy/per-regime hit-rate & expectancy rollups; synthesizer now
+  reads real blended hit-rate priors (neutral until 30+ resolved, spec §9);
+  analytics endpoint + Analytics view show calibration plot and strategy
+  table. Spec's "optional Alpaca paper mirror" intentionally satisfied by
+  the internal bar-walk fill simulator instead — CLAUDE.md's hard rule is
+  no order endpoints of any kind. Risk limits are never auto-tuned.

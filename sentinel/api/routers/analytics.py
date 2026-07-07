@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from sentinel import DISCLAIMER
 from sentinel.db.base import get_db
-from sentinel.db.models import SignalRow
+from sentinel.db.models import SignalRow, StrategyStatRow
+from sentinel.evaluation.stats import performance_summary
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -51,16 +52,24 @@ def analytics_summary(db: Session) -> dict:
         "by_regime": by_regime,
         "by_decision": by_decision,
         "resolved": {
-            "count": 0,
-            "hit_rate": None,
-            "expectancy_r": None,
-            "sharpe": None,
-            "sortino": None,
-            "brier_score": None,
-            "calibration": [],
-            "note": "outcome stats activate once the nightly evaluation loop "
-            "(Phase 6) has resolved signals; neutral priors until 30+ resolve",
+            **performance_summary(db),
+            "note": "confidence uses neutral priors until a strategy has 30+ "
+            "resolved signals",
         },
+        "strategy_stats": [
+            {
+                "strategy": r.strategy,
+                "regime": r.regime,
+                "resolved_count": r.resolved_count,
+                "hit_rate": r.hit_rate,
+                "expectancy_r": r.expectancy_r,
+            }
+            for r in db.execute(
+                select(StrategyStatRow).order_by(
+                    StrategyStatRow.strategy, StrategyStatRow.regime
+                )
+            ).scalars()
+        ],
     }
 
 
