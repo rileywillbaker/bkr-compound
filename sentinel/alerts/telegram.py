@@ -38,19 +38,39 @@ class TelegramChannel:
             return False, str(exc)
 
     def validate(self) -> ProviderCheck:
-        """'Test connection': verify the token by calling getMe."""
+        """'Test connection': verify the token via getMe, then send a real
+        message to the configured chat so delivery is proven end-to-end
+        (a valid token with a wrong/unreachable chat_id must not pass)."""
         from telegram import Bot
 
-        async def _me():
-            return await Bot(self._token).get_me()
+        from sentinel.alerts.format import FOOTER
+
+        async def _check() -> str:
+            bot = Bot(self._token)
+            me = await bot.get_me()
+            await bot.send_message(
+                chat_id=self._chat_id,
+                text=f"B-Quant test connection OK — alerts will arrive here. {FOOTER}",
+            )
+            return str(me.username)
 
         try:
-            me = asyncio.run(_me())
+            username = asyncio.run(_check())
             return ProviderCheck(
-                provider="telegram", ok=True, detail=f"bot @{me.username} reachable"
+                provider="telegram",
+                ok=True,
+                detail=f"test message sent from @{username} — check your Telegram",
             )
         except Exception as exc:
-            return ProviderCheck(provider="telegram", ok=False, detail=str(exc))
+            detail = str(exc)
+            lowered = detail.lower()
+            if "chat not found" in lowered or "forbidden" in lowered:
+                detail += (
+                    " — Telegram bots cannot message you until you message them:"
+                    " open Telegram, send your bot any message (e.g. 'hi'),"
+                    " and double-check the chat ID is your numeric user ID"
+                )
+            return ProviderCheck(provider="telegram", ok=False, detail=detail)
 
 
 def build_telegram(db: Session) -> TelegramChannel:

@@ -177,7 +177,10 @@ def test_briefs(db, monkeypatch):
     assert "Regime:" in pre and "Equity:" in pre
     assert pre.endswith("Not financial advice. You place all trades.")
 
-    signal = make_signal()
+    # compose_post_close counts signals since ET midnight *today*; the shared
+    # frozen CREATED stamp would drift out of that window the day after it was
+    # written, so this signal must carry a current timestamp.
+    signal = make_signal(created_at=datetime.now(UTC))
     save_signals(db, PipelineState(symbols=["NVDA"], signals=[signal]))
     post = compose_post_close(db)
     assert "Signals today: 1 (1 BUY/SELL)" in post
