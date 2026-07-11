@@ -2,9 +2,18 @@
 # resolves its model through a role defined here. Swap providers by editing
 # this file only.
 #
-# Roles:
-#   reasoning : synthesis, strategy tie-breaks, explanations, chat
-#   triage    : news screening, cheap classification
+# Roles (cost policy, spec update 2026-07):
+#   reasoning : Sonnet — SYNTHESIS ONLY (final signal explanation) plus the
+#               interactive chat assistant. Nothing per-candidate runs here.
+#   triage    : Haiku — everything cheap and per-candidate: news screening,
+#               analyst interpretation (technicals/fundamentals/macro), and
+#               the strategy tie-break vote.
+#
+# Budget: policy.daily_cost_budget_usd is a HARD daily cap enforced in
+# sentinel/providers/llm/client.py. When it (or the token backstop) is hit,
+# BudgetExceeded is raised and every call site automatically degrades to its
+# deterministic fallback — signals are still produced, flagged
+# deterministic_only. There is no override.
 #
 # To use a local Ollama fallback, uncomment the ollama entries and set
 # `active` accordingly. No code changes required.
@@ -37,3 +46,6 @@ policy:
   request_timeout_seconds: 60
   max_retries: 3
   retry_backoff_base_seconds: 2
+  # Hard daily spend cap (USD, UTC day) across all roles. Hitting it flips
+  # the pipeline into deterministic-only degraded mode until midnight UTC.
+  daily_cost_budget_usd: 0.50

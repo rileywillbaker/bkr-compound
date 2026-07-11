@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from sentinel import DISCLAIMER
+from sentinel.data.discovery import DiscoveryResult, discover, get_scan_symbols
 from sentinel.db.base import get_db
 from sentinel.pipeline import runner
 from sentinel.pipeline.state import PipelineState, Signal
@@ -15,7 +16,9 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
 
 class RunRequest(BaseModel):
-    symbols: list[str] | None = None  # default: configured watchlist
+    # default: today's scan set (discovery candidates + watchlist + positions);
+    # any ticker may be passed explicitly — manual runs never send alerts
+    symbols: list[str] | None = None
     use_llm: bool = True
 
 
@@ -49,3 +52,18 @@ def run_pipeline(request: RunRequest, db: Session = Depends(get_db)) -> RunSumma
 def last_result() -> RunSummary | None:
     state = runner.last_run()
     return _summary(state) if state else None
+
+
+@router.get("/scan-symbols")
+def scan_symbols(db: Session = Depends(get_db)) -> dict:
+    """What the next scheduled scan will analyze (candidates + watchlist +
+    positions)."""
+    return {"symbols": get_scan_symbols(db)}
+
+
+@router.post("/discover")
+def run_discovery(db: Session = Depends(get_db)) -> DiscoveryResult:
+    """Manual discovery sweep over the full universe (deterministic, no LLM)."""
+    result = discover(db)
+    db.commit()
+    return result

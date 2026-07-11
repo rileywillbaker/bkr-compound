@@ -19,6 +19,7 @@ from sentinel.agents.regime import classify_regime
 from sentinel.agents.screener import ScreenerParams, screen
 from sentinel.agents.technicals import compute_technicals
 from sentinel.data.context import build_market_context
+from sentinel.data.discovery import insider_net_shares
 from sentinel.data.market_hours import trading_days_until
 from sentinel.db.models import SystemEvent
 from sentinel.pipeline.state import CandidateState, PipelineState
@@ -68,7 +69,12 @@ def _analysts_node(state: PipelineState, db: Session) -> dict:
         # spec calls for per-candidate parallelism; sequential is equivalent
         # for correctness and keeps LLM budget/backoff behavior simple
         cand.verdicts = all_analysts(
-            db, state.context, symbol, cand.snapshot, use_llm=state.use_llm
+            db,
+            state.context,
+            symbol,
+            cand.snapshot,
+            use_llm=state.use_llm,
+            insider_net_shares_90d=insider_net_shares(db, symbol),
         )
     return {"candidates": candidates}
 

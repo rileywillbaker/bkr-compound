@@ -116,6 +116,19 @@ def test_router_filters_threshold_approval_and_action(db, telegram_ok):
     assert len(rows) == 1 and rows[0].kind == "signal" and rows[0].ok
 
 
+def test_router_action_gating(db, telegram_ok):
+    """09:30 scans alert BUY only, 15:30 SELL only, manual runs nothing."""
+    signals = [
+        make_signal(ticker="BUYA"),
+        make_signal(ticker="SELA", action="SELL"),
+    ]
+    assert route_signal_alerts(db, signals, allowed_actions=()) == 0  # manual/chat
+    assert route_signal_alerts(db, signals, allowed_actions={"BUY"}) == 1
+    assert "BUYA" in telegram_ok[0]
+    assert route_signal_alerts(db, signals, allowed_actions={"SELL"}) == 1
+    assert "SELA" in telegram_ok[1]
+
+
 def test_router_rate_limit(db, telegram_ok):
     signals = [make_signal(ticker=f"S{i:02d}") for i in range(7)]
     sent = route_signal_alerts(db, signals)

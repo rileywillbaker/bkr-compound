@@ -1,6 +1,11 @@
 """UI-editable app settings (spec §7.7): watchlist manager, alert quiet
 hours, starting equity, onboarding flag.
 
+The watchlist is HIGHLIGHTED TICKERS ONLY: names the user always wants
+scanned and surfaced in briefs. It does NOT bound the universe — scanning
+and analysis cover the full static universe (sentinel/data/universe.py) via
+the discovery candidate list, and any ticker can be analyzed on demand.
+
 Values live in the `app_settings` JSON key-value table; the `.env` value is
 the fallback so a fresh install works before onboarding completes. Bootstrap
 secrets and provider keys are NOT stored here (see config.py and

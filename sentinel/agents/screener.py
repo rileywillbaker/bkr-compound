@@ -1,8 +1,9 @@
 """Screener Agent (spec §4.2) — deterministic, no LLM.
 
-Scans the watchlist/universe against user-settable filters (spec §1.6):
-sector, market cap, price, dollar volume, volatility appetite. Emits
-candidates with raw factor scores.
+Scans whatever symbols the run's MarketContext carries — any ticker in the
+expanded universe, not just the watchlist — against user-settable filters
+(spec §1.6): sector, market cap, price, dollar volume, volatility appetite.
+Emits candidates with raw factor scores.
 """
 
 from pydantic import BaseModel, Field

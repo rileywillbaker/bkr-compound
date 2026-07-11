@@ -344,3 +344,26 @@ class ApiUsage(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     ok: Mapped[bool] = mapped_column(Boolean, default=True)
     detail: Mapped[str] = mapped_column(Text, default="")
+
+
+# --------------------------------------------------------------------------
+# Universe discovery — insider transactions (Finnhub)
+# --------------------------------------------------------------------------
+class InsiderTransactionRow(Base):
+    """Insider filings per symbol; discovery uses these to detect buying
+    clusters across the full universe without any LLM involvement."""
+
+    __tablename__ = "insider_transactions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(12), index=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    share_change: Mapped[int] = mapped_column(BigInteger, default=0)
+    transaction_date: Mapped[date] = mapped_column(Date, index=True)
+    transaction_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    filing_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol", "name", "transaction_date", "share_change", name="uq_insider_txn"
+        ),
+    )

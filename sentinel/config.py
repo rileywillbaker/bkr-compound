@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     max_alerts_per_day: int = Field(default=5, ge=0)
 
     # --- LLM budget ---
+    # Dollar cap is authoritative (models.yaml policy.daily_cost_budget_usd
+    # wins when set there); the token count is a backstop for calls whose
+    # cost could not be computed.
+    llm_daily_cost_budget_usd: float = Field(default=0.50, gt=0)
     llm_daily_token_budget: int = 2_000_000
 
     # --- paths ---

@@ -4,6 +4,10 @@ macro, options-flow stub.
 Pattern: deterministic code assembles the fact table; the LLM only interprets
 it into a verdict. If the LLM is unavailable (budget/keys/outage) each analyst
 falls back to a deterministic rule-based verdict flagged deterministic_only.
+
+Cost policy: every analyst runs on the cheap "triage" role (Haiku) — these
+calls happen per candidate, so they dominate spend. The "reasoning" role
+(Sonnet) is reserved for synthesis (see pipeline/synthesizer.py).
 """
 
 import json
@@ -121,7 +125,7 @@ def technicals_analyst(
         return fallback
     facts = {"symbol": symbol, "indicators": snap.model_dump()}
     return _llm_or_fallback(
-        db, "reasoning", "technicals", symbol, _TECH_SYSTEM, facts, fallback
+        db, "triage", "technicals", symbol, _TECH_SYSTEM, facts, fallback
     )
 
 
@@ -218,7 +222,7 @@ def fundamentals_analyst(
         "insider_net_shares_90d": insider_net_shares_90d,
     }
     return _llm_or_fallback(
-        db, "reasoning", "fundamentals", symbol, _FUND_SYSTEM, facts, fallback
+        db, "triage", "fundamentals", symbol, _FUND_SYSTEM, facts, fallback
     )
 
 
@@ -262,7 +266,7 @@ def macro_analyst(
         for series, points in context.macro.items()
     }
     facts = {"symbol": symbol, "sector": sym_ctx.sector, "series": tail}
-    return _llm_or_fallback(db, "reasoning", "macro", symbol, _MACRO_SYSTEM, facts, fallback)
+    return _llm_or_fallback(db, "triage", "macro", symbol, _MACRO_SYSTEM, facts, fallback)
 
 
 # ----------------------------------------------------------- options flow ----

@@ -1,15 +1,21 @@
 """Alert Router (spec §6): decides which signals become Telegram alerts.
 
 Send only when ALL hold:
-  - action is BUY or SELL
+  - the signal's action is in the caller's `allowed_actions` — the scheduler
+    passes {"BUY"} after the 09:30 open scan and {"SELL"} after the 15:30
+    close scan; those are the ONLY scans that alert (manual/chat runs pass
+    nothing and never alert)
   - the risk engine approved (signal.actionable — there is no way around it)
   - confidence ≥ alert_confidence_threshold (default 0.80)
   - the daily rate limit (max_alerts_per_day, default 5) is not exhausted
 
-Every send attempt is recorded in the alerts table; successful signal alerts
-flip signal.alert_sent.
+Quiet hours affect notification delivery ONLY, never cost: the pipeline,
+ingestion, and LLM budget decisions all happen upstream regardless of the
+quiet-hours window. Every send attempt is recorded in the alerts table;
+successful signal alerts flip signal.alert_sent.
 """
 
+from collections.abc import Collection
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -80,13 +86,19 @@ def send_ops_alert(db: Session, text: str) -> bool:
     return ok
 
 
-def route_signal_alerts(db: Session, signals: list[Signal]) -> int:
+def route_signal_alerts(
+    db: Session,
+    signals: list[Signal],
+    allowed_actions: Collection[str] = ("BUY", "SELL"),
+) -> int:
     """Send alerts for qualifying signals; returns the number sent."""
     settings = get_settings()
     eligible = [
         s
         for s in signals
-        if s.actionable and s.confidence >= settings.alert_confidence_threshold
+        if s.actionable
+        and s.action in allowed_actions
+        and s.confidence >= settings.alert_confidence_threshold
     ]
     if not eligible:
         return 0

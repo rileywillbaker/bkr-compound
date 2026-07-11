@@ -3,8 +3,11 @@
 - Models are resolved by ROLE from config/models.yaml — never hardcoded.
 - Every call: JSON output validated against a pydantic schema, retry with
   backoff, token/cost logged to api_usage.
-- Hard daily token budget: when exceeded, BudgetExceeded is raised and the
-  pipeline degrades to deterministic-only signals (flagged as such).
+- Hard daily COST budget (policy.daily_cost_budget_usd in models.yaml,
+  default $0.50) plus a token-count backstop: when either is exceeded,
+  BudgetExceeded is raised before the call is made and the pipeline degrades
+  automatically to deterministic-only signals (flagged as such). Degraded
+  mode needs no operator action and has no override.
 - LLM output NEVER becomes a numeric trade parameter.
 """
 
@@ -63,11 +66,39 @@ def tokens_used_today(db: Session) -> int:
     return int(total or 0)
 
 
+def cost_used_today(db: Session) -> float:
+    since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    total = db.execute(
+        select(func.sum(ApiUsage.cost_usd)).where(
+            ApiUsage.provider == "anthropic", ApiUsage.ts >= since
+        )
+    ).scalar_one_or_none()
+    return float(total or 0.0)
+
+
+def daily_cost_budget_usd() -> float:
+    """Dollar cap from models.yaml policy; Settings value is the fallback."""
+    policy = _load_models_config().get("policy") or {}
+    try:
+        return float(policy["daily_cost_budget_usd"])
+    except (KeyError, TypeError, ValueError):
+        return get_settings().llm_daily_cost_budget_usd
+
+
 def _check_budget(db: Session) -> None:
-    budget = get_settings().llm_daily_token_budget
+    """Raise BudgetExceeded when today's spend (or the token backstop) is
+    exhausted. Callers catch LLMError and fall back to deterministic output,
+    so degraded mode activates automatically the moment the cap is hit."""
+    cost_budget = daily_cost_budget_usd()
+    cost_used = cost_used_today(db)
+    if cost_used >= cost_budget:
+        raise BudgetExceeded(
+            f"daily cost budget exhausted (${cost_used:.4f}/${cost_budget:.2f})"
+        )
+    token_budget = get_settings().llm_daily_token_budget
     used = tokens_used_today(db)
-    if used >= budget:
-        raise BudgetExceeded(f"daily token budget exhausted ({used}/{budget})")
+    if used >= token_budget:
+        raise BudgetExceeded(f"daily token budget exhausted ({used}/{token_budget})")
 
 
 def _record_usage(

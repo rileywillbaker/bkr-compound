@@ -1,18 +1,27 @@
 """Ingestion jobs: pull from providers, upsert into TimescaleDB, log to
 system_events. Each job is independent and safe to re-run (idempotent upserts).
+
+Jobs default to the FULL static universe (S&P 500 + watchlist + positions,
+see sentinel.data.universe) so discovery can monitor every name; pass
+`symbols` to restrict a run (e.g. fundamentals/quotes for just the day's
+scan set, or an on-demand backfill for one ticker). All provider calls go
+through the shared rate limiter, so universe-wide runs are slow-but-safe on
+free tiers rather than bursty.
 """
 
 from datetime import UTC, date, datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from sentinel.config import get_settings
+from sentinel.data.universe import MARKET_SYMBOLS, get_universe
 from sentinel.db.models import (
     BarRow,
     EarningsCalendarRow,
     FilingRow,
     FundamentalsRow,
+    InsiderTransactionRow,
     MacroSeriesRow,
     NewsItemRow,
     QuoteLatest,
@@ -28,8 +37,6 @@ from sentinel.providers.registry import (
     build_research,
 )
 
-MARKET_SYMBOLS = ["SPY"]  # always ingested for regime detection
-
 
 def _log(db: Session, kind: str, message: str, level: str = "INFO", payload: dict | None = None):
     db.add(SystemEvent(kind=kind, message=message, level=level, payload=payload))
@@ -37,22 +44,17 @@ def _log(db: Session, kind: str, message: str, level: str = "INFO", payload: dic
 
 
 def _universe(db: Session) -> list[str]:
-    """Watchlist + regime symbols + any held positions (positions from Phase 2)."""
-    symbols = set(get_settings().watchlist_symbols) | set(MARKET_SYMBOLS)
-    try:
-        from sentinel.db import models as _m
-
-        position = getattr(_m, "Position", None)  # added in Phase 2
-        if position is not None:
-            for (sym,) in db.query(position.symbol).filter(position.shares != 0).all():
-                symbols.add(sym)
-    except Exception:
-        pass
-    return sorted(symbols)
+    """Full universe: static S&P 500 list + watchlist + held positions + SPY."""
+    return get_universe(db)
 
 
-def ingest_bars(db: Session, timeframe: str = "1Day", lookback_days: int = 400) -> int:
-    """Upsert bars for the whole universe. Returns row count."""
+def ingest_bars(
+    db: Session,
+    timeframe: str = "1Day",
+    lookback_days: int = 400,
+    symbols: list[str] | None = None,
+) -> int:
+    """Upsert bars (whole universe by default). Returns row count."""
     try:
         md = build_market_data(db)
     except CredentialsMissing as exc:
@@ -60,7 +62,7 @@ def ingest_bars(db: Session, timeframe: str = "1Day", lookback_days: int = 400) 
         return 0
     start = datetime.now(UTC) - timedelta(days=lookback_days)
     total = 0
-    for symbol in _universe(db):
+    for symbol in symbols or _universe(db):
         try:
             bars = md.get_bars(symbol, timeframe, start)
         except ProviderError as exc:
@@ -96,14 +98,14 @@ def ingest_bars(db: Session, timeframe: str = "1Day", lookback_days: int = 400) 
     return total
 
 
-def ingest_quotes(db: Session) -> int:
+def ingest_quotes(db: Session, symbols: list[str] | None = None) -> int:
     try:
         md = build_market_data(db)
     except CredentialsMissing as exc:
         _log(db, "ingest.quotes", str(exc), level="WARN")
         return 0
     count = 0
-    for symbol in _universe(db):
+    for symbol in symbols or _universe(db):
         try:
             q = md.get_latest_quote(symbol)
         except ProviderError as exc:
@@ -123,7 +125,7 @@ def ingest_quotes(db: Session) -> int:
     return count
 
 
-def ingest_news(db: Session, days: int = 3) -> int:
+def ingest_news(db: Session, days: int = 3, symbols: list[str] | None = None) -> int:
     try:
         research = build_research(db)
     except CredentialsMissing as exc:
@@ -137,7 +139,7 @@ def ingest_news(db: Session, days: int = 3) -> int:
         items.extend(research.market_news())
     except ProviderError as exc:
         _log(db, "ingest.news", f"market: {exc}", level="ERROR")
-    for symbol in _universe(db):
+    for symbol in symbols or _universe(db):
         try:
             items.extend(research.company_news(symbol, start, end))
         except ProviderError as exc:
@@ -162,14 +164,14 @@ def ingest_news(db: Session, days: int = 3) -> int:
     return count
 
 
-def ingest_fundamentals(db: Session) -> int:
+def ingest_fundamentals(db: Session, symbols: list[str] | None = None) -> int:
     try:
         research = build_research(db)
     except CredentialsMissing as exc:
         _log(db, "ingest.fundamentals", str(exc), level="WARN")
         return 0
     count = 0
-    for symbol in _universe(db):
+    for symbol in symbols or _universe(db):
         values: dict = {"symbol": symbol, "as_of": datetime.now(UTC)}
         try:
             profile = research.company_profile(symbol)
@@ -276,7 +278,9 @@ def ingest_macro(db: Session, lookback_days: int = 730) -> int:
     return count
 
 
-def ingest_filings(db: Session, forms: list[str] | None = None) -> int:
+def ingest_filings(
+    db: Session, forms: list[str] | None = None, symbols: list[str] | None = None
+) -> int:
     forms = forms or ["8-K", "10-Q", "10-K", "4"]
     try:
         filings = build_filings(db)
@@ -284,7 +288,7 @@ def ingest_filings(db: Session, forms: list[str] | None = None) -> int:
         _log(db, "ingest.filings", str(exc), level="WARN")
         return 0
     count = 0
-    for symbol in _universe(db):
+    for symbol in symbols or _universe(db):
         if symbol in MARKET_SYMBOLS or symbol in ("SPY", "QQQ"):
             continue  # ETFs don't file
         try:
@@ -311,3 +315,62 @@ def ingest_filings(db: Session, forms: list[str] | None = None) -> int:
             count += 1
     _log(db, "ingest.filings", f"{count} filings")
     return count
+
+
+def ingest_insider_transactions(db: Session, symbols: list[str] | None = None) -> int:
+    """Insider filings for discovery's buying-cluster trigger."""
+    try:
+        research = build_research(db)
+    except CredentialsMissing as exc:
+        _log(db, "ingest.insiders", str(exc), level="WARN")
+        return 0
+    count = 0
+    for symbol in symbols or _universe(db):
+        if symbol in MARKET_SYMBOLS or symbol in ("SPY", "QQQ"):
+            continue  # ETFs have no insiders
+        try:
+            txns = research.insider_transactions(symbol)
+        except ProviderUnavailable:
+            continue
+        except ProviderError as exc:
+            _log(db, "ingest.insiders", f"{symbol}: {exc}", level="ERROR")
+            continue
+        for t in txns:
+            stmt = (
+                pg_insert(InsiderTransactionRow)
+                .values(
+                    symbol=t.symbol,
+                    name=t.name,
+                    share_change=t.share_change,
+                    transaction_date=t.transaction_date,
+                    transaction_price=t.transaction_price,
+                    filing_date=t.filing_date,
+                )
+                .on_conflict_do_nothing(constraint="uq_insider_txn")
+            )
+            db.execute(stmt)
+            count += 1
+    _log(db, "ingest.insiders", f"{count} transactions")
+    return count
+
+
+def ensure_symbol_data(db: Session, symbol: str) -> None:
+    """On-demand backfill so ANY ticker — even outside the static universe —
+    can go through the full pipeline (chat: "Should I buy XYZ?"). Only
+    fetches what is missing; provider failures degrade to whatever data
+    exists (the pipeline handles gaps)."""
+    symbol = symbol.strip().upper()
+    has_bars = db.execute(
+        select(BarRow.symbol)
+        .where(BarRow.symbol == symbol, BarRow.timeframe == "1Day")
+        .limit(1)
+    ).first()
+    if not has_bars:
+        ingest_bars(db, timeframe="1Day", symbols=[symbol])
+    if db.get(FundamentalsRow, symbol) is None:
+        ingest_fundamentals(db, symbols=[symbol])
+    has_news = db.execute(
+        select(NewsItemRow.id).where(NewsItemRow.symbol == symbol).limit(1)
+    ).first()
+    if not has_news:
+        ingest_news(db, symbols=[symbol])

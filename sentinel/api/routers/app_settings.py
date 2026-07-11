@@ -29,8 +29,12 @@ _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 @router.get("")
 def get_all(db: Session = Depends(get_db)) -> dict:
+    from sentinel.data.universe import load_static_universe
+
     return {
+        # highlighted tickers only — the scan universe is the static list
         "watchlist": get_watchlist(db),
+        "universe_size": len(load_static_universe()),
         "starting_equity": get_starting_equity(db),
         "alert_quiet_hours": get_setting(db, QUIET_HOURS_KEY),
         "onboarding_complete": is_onboarded(db),
@@ -38,6 +42,8 @@ def get_all(db: Session = Depends(get_db)) -> dict:
 
 
 class WatchlistIn(BaseModel):
+    """Highlighted tickers (always scanned + surfaced); never a universe cap."""
+
     symbols: list[str] = Field(min_length=1, max_length=100)
 
 

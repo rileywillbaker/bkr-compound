@@ -81,9 +81,11 @@ def select_strategy(
             "candidate": {"symbol": snap.symbol, "close": snap.close},
         }
         try:
+            # triage role (Haiku): the vote is a name from a fixed set, so
+            # the cheap model suffices — Sonnet is reserved for synthesis
             vote = complete_json(
                 db,
-                role="reasoning",
+                role="triage",
                 system=f"{_TIE_SYSTEM}\nTied names: {names}",
                 user=json.dumps(facts, default=str),
                 schema=_TieBreakVote,

@@ -35,11 +35,14 @@ _SYSTEM = (
     "the deterministic pipeline and risk engine; you cannot execute trades, "
     "send alerts, or override a risk rejection, and you must say so if asked. "
     "If asked whether to buy/sell a specific ticker, call analyze_ticker and "
-    "present its signal and risk check verbatim. When uncertain the answer is "
-    "NO TRADE. Keep replies under 250 words.\n\n"
+    "present its signal and risk check verbatim — it works for ANY ticker, "
+    "not just the watchlist (the watchlist is only the user's highlighted "
+    "names). When uncertain the answer is NO TRADE. Keep replies under 250 "
+    "words.\n\n"
     "Tools: latest_signals (recent signals), portfolio (positions/valuation), "
-    "market_context (regime, watchlist quotes), performance (evaluation "
-    "stats), analyze_ticker (tool_arg=TICKER; runs the full pipeline)."
+    "market_context (regime, highlighted watchlist, discovery candidates), "
+    "performance (evaluation stats), analyze_ticker (tool_arg=TICKER; runs "
+    "the full pipeline for any ticker)."
 )
 
 
@@ -101,6 +104,7 @@ def _tool_portfolio(db: Session, _arg: str | None) -> dict:
 
 
 def _tool_market_context(db: Session, _arg: str | None) -> dict:
+    from sentinel.data.discovery import get_candidates
     from sentinel.pipeline.runner import last_run
 
     watchlist = get_watchlist(db)
@@ -112,7 +116,11 @@ def _tool_market_context(db: Session, _arg: str | None) -> dict:
             "as_of": str(run.started_at),
             "detail": run.regime.detail,
         }
-    return {"watchlist": watchlist, "last_regime": regime}
+    return {
+        "highlighted_watchlist": watchlist,
+        "discovery_candidates": get_candidates(db),
+        "last_regime": regime,
+    }
 
 
 def _tool_performance(db: Session, _arg: str | None) -> dict:
@@ -122,12 +130,16 @@ def _tool_performance(db: Session, _arg: str | None) -> dict:
 
 
 def _tool_analyze_ticker(db: Session, arg: str | None) -> dict:
+    from sentinel.data.ingest import ensure_symbol_data
     from sentinel.pipeline.persist import get_risk_check
     from sentinel.pipeline.runner import run_scan
 
     if not arg or not arg.strip():
         return {"error": "analyze_ticker requires a ticker symbol in tool_arg"}
     ticker = arg.strip().upper()
+    # any ticker is analyzable — backfill data on demand if it was never
+    # ingested (e.g. outside the static universe); chat runs never alert
+    ensure_symbol_data(db, ticker)
     state = run_scan(db, symbols=[ticker])
     out = []
     for signal in state.signals:

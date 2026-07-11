@@ -77,7 +77,9 @@ def test_technicals_analyst_llm_path(db, llm_ok):
     assert verdict.score == 42
     assert verdict.confidence == 0.8
     assert not verdict.deterministic_only
-    assert llm_ok[0]["role"] == "reasoning"
+    # all per-candidate analysts run on the cheap triage role (Haiku);
+    # reasoning (Sonnet) is reserved for synthesis
+    assert llm_ok[0]["role"] == "triage"
     assert llm_ok[0]["endpoint"] == "analyst.technicals"
 
 
@@ -117,7 +119,7 @@ def test_fundamentals_unavailable_without_data(db, llm_ok):
 def test_fundamentals_llm_path(db, llm_ok):
     verdict = fundamentals_analyst(db, make_symbol_context("X"), insider_net_shares_90d=5000)
     assert verdict.score == 42
-    assert llm_ok[0]["role"] == "reasoning"
+    assert llm_ok[0]["role"] == "triage"
 
 
 def test_macro_unavailable_without_series(db, llm_ok):
