@@ -1,10 +1,11 @@
 """Worker entrypoint: `python -m sentinel.scheduler.run`.
 
 Scan cadence (spec update 2026-07): exactly three scans per trading day —
-09:00 pre-market discovery, 09:30 open confirmation (BUY alerts), 15:30
-near-close exit scan (SELL alerts). The old 15/30-minute rolling intraday
-scan is gone. Every job is mon-fri only; jobs.py re-checks the weekend/
-holiday guard internally as well.
+08:30 pre-market discovery (started early so the ~25-minute rate-limited
+universe ingest is done well before the open), 09:30 open confirmation
+(BUY alerts), 15:30 near-close exit scan (SELL alerts). The old
+15/30-minute rolling intraday scan is gone. Every job is mon-fri only;
+jobs.py re-checks the weekend/holiday guard internally as well.
 """
 
 import time
@@ -25,8 +26,8 @@ def build_scheduler() -> BackgroundScheduler:
         jobs.job_premarket_discovery,
         "cron",
         day_of_week="mon-fri",
-        hour=9,
-        minute=0,
+        hour=8,
+        minute=30,
         id="premarket_discovery",
         coalesce=True,
         max_instances=1,

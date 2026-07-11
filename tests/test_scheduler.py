@@ -1,4 +1,4 @@
-"""Scheduler contract: exactly three scans per trading day (09:00 / 09:30 /
+"""Scheduler contract: exactly three scans per trading day (08:30 / 09:30 /
 15:30 ET), no rolling intraday scan, everything mon-fri, and a hard weekend
 guard inside the jobs themselves."""
 
@@ -36,14 +36,14 @@ def test_exactly_three_scans_and_no_intraday(sched):
     }
 
 
-def test_scan_times_are_0900_0930_1530_et(sched):
+def test_scan_times_are_0830_0930_1530_et(sched):
     times = {
         job_id: (fields["hour"], fields["minute"])
         for job_id, fields in (
             (j.id, _fields(j)) for j in sched.get_jobs()
         )
     }
-    assert times["premarket_discovery"] == ("9", "0")
+    assert times["premarket_discovery"] == ("8", "30")
     assert times["market_open_scan"] == ("9", "30")
     assert times["close_scan"] == ("15", "30")
     assert str(sched.timezone) == "America/New_York"

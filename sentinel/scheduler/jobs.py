@@ -2,10 +2,11 @@
 
 Schedule (all times America/New_York, NYSE calendar). Scans run exactly
 THREE times per trading day — there is no rolling intraday scan:
-  - 09:00 ET : pre-market ingest over the FULL universe (bars, news,
+  - 08:30 ET : pre-market ingest over the FULL universe (bars, news,
                earnings, macro, insider txns, filings) + discovery run that
-               builds the day's candidate list + pre-open brief. No signal
-               alerts fire from this pass.
+               builds the day's candidate list + pre-open brief. Starts an
+               hour before the open because the rate-limited universe sweep
+               takes ~25 minutes. No signal alerts fire from this pass.
   - 09:30 ET : market-open confirmation scan (candidates + watchlist +
                positions). Only BUY alerts may fire.
   - 15:30 ET : near-close exit scan. Only SELL alerts may fire.
@@ -52,7 +53,7 @@ def _scan_symbols() -> list[str]:
 
 
 def job_premarket_discovery() -> None:
-    """09:00 ET: full-universe ingest, then build the day's candidate list.
+    """08:30 ET: full-universe ingest, then build the day's candidate list.
 
     Order matters: discovery reads only the DB, so everything it needs must
     land first. Fundamentals and quotes are then refreshed for just the scan
