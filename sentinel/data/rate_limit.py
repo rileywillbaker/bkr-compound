@@ -13,9 +13,13 @@ import redis as redis_lib
 from sentinel.config import get_settings
 
 # provider -> (max calls, window seconds). Free-tier limits with headroom.
+# Finnhub is paced at 1/s rather than 55/60s: a fixed 60s window releases a
+# ~50-call burst at each reset, which trips Finnhub's own short-term burst
+# limit (observed as upstream 429s during full-universe sweeps). 1/s gives
+# the same worst-case throughput (60/min) with no bursts.
 BUDGETS: dict[str, tuple[int, int]] = {
     "alpaca": (190, 60),
-    "finnhub": (55, 60),
+    "finnhub": (1, 1),
     "fred": (100, 60),
     "edgar": (8, 1),
     "telegram": (25, 60),
