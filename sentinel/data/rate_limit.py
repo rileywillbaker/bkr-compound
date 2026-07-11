@@ -89,8 +89,13 @@ class RateLimiter:
             retry = window - (time.time() % window)
             raise RateLimitExceeded(provider, retry)
 
-    def wait_and_acquire(self, provider: str, max_wait: float = 30.0) -> None:
-        """Blocking acquire for batch ingestion jobs."""
+    def wait_and_acquire(self, provider: str, max_wait: float = 120.0) -> None:
+        """Blocking acquire for batch ingestion jobs.
+
+        max_wait must exceed the provider's window (60s for most budgets):
+        full-universe sweeps exhaust a window every ~55 calls, and the next
+        one can be a full window away — a shorter deadline aborts the batch
+        partway through instead of riding out the boundary."""
         deadline = time.monotonic() + max_wait
         while True:
             try:
