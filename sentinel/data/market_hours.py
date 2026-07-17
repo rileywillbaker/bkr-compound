@@ -1,7 +1,7 @@
 """NYSE market-hours helpers (exchange holiday calendar via
 pandas_market_calendars). All scheduling decisions go through here."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
@@ -40,6 +40,13 @@ def is_market_open(now: datetime | None = None) -> bool:
 
 def is_trading_day(day: datetime | None = None) -> bool:
     return market_schedule(day) is not None
+
+
+def previous_trading_day(now: datetime | None = None) -> date:
+    """Most recent trading day strictly before today (ET)."""
+    today = (now or datetime.now(UTC)).astimezone(ET).date()
+    days = _nyse().valid_days(start_date=today - pd.Timedelta(days=14), end_date=today)
+    return [d.date() for d in days if d.date() < today][-1]
 
 
 def trading_days_until(target: pd.Timestamp | datetime, now: datetime | None = None) -> int:

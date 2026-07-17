@@ -1,18 +1,30 @@
 """Data-staleness watchdog (spec §4.9).
 
-During market hours, if the newest intraday bar is older than the threshold,
-record a WARN system_event and notify via the alert channel (wired in
-Phase 4; before that, the event row is the signal)."""
+The three-scans-per-day cadence keeps DAILY bars fresh (08:30 full ingest,
+15:30 partial refresh, 16:45 post-close); nothing ingests intraday bars
+anymore, so intraday age is meaningless — checking it made the watchdog
+warn forever once the old rolling scan was retired. Stale now means:
+during market hours the newest 1Day bar predates the previous trading
+session, i.e. the morning ingest hasn't succeeded for at least a full
+session (the failure mode that actually bites: worker dead, host asleep
+through every grace window, provider outage).
+
+The watchdog is dashboard-only: it records a WARN system_event (at most
+one per ALERT_COOLDOWN while the condition persists — it ticks every 5
+minutes and must not log 78 times a day about one problem) and never
+sends Telegram. Per user decision 2026-07-17, Telegram is reserved for
+scan results; operational problems surface in the UI event log.
+"""
 
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from sentinel.data.market_hours import is_market_open
+from sentinel.data.market_hours import ET, is_market_open, previous_trading_day
 from sentinel.db.models import BarRow, SystemEvent
 
-STALE_AFTER = timedelta(minutes=15)
+ALERT_COOLDOWN = timedelta(hours=6)
 
 
 def check_staleness(db: Session, now: datetime | None = None) -> bool:
@@ -21,17 +33,27 @@ def check_staleness(db: Session, now: datetime | None = None) -> bool:
     if not is_market_open(now):
         return True
     newest = db.execute(
-        select(func.max(BarRow.ts)).where(BarRow.timeframe != "1Day")
+        select(func.max(BarRow.ts)).where(BarRow.timeframe == "1Day")
     ).scalar_one_or_none()
     if newest is None:
-        detail = "no intraday bars ingested yet"
+        detail = "no daily bars ingested yet"
     else:
         if newest.tzinfo is None:
             newest = newest.replace(tzinfo=UTC)
-        age = now - newest
-        if age <= STALE_AFTER:
+        newest_day = newest.astimezone(ET).date()
+        if newest_day >= previous_trading_day(now):
             return True
-        detail = f"newest intraday bar is {age.total_seconds() / 60:.0f} min old"
+        age_days = (now.astimezone(ET).date() - newest_day).days
+        detail = f"newest daily bar is {age_days} days old ({newest_day})"
+
+    last_warned = db.execute(
+        select(func.max(SystemEvent.ts)).where(SystemEvent.kind == "watchdog.stale_data")
+    ).scalar_one_or_none()
+    if last_warned is not None:
+        if last_warned.tzinfo is None:
+            last_warned = last_warned.replace(tzinfo=UTC)
+        if now - last_warned < ALERT_COOLDOWN:
+            return False  # still stale, but already recorded this episode
 
     db.add(
         SystemEvent(
@@ -41,10 +63,4 @@ def check_staleness(db: Session, now: datetime | None = None) -> bool:
         )
     )
     db.flush()
-    try:  # Phase 4 wires a real alert channel; ignore if unavailable
-        from sentinel.alerts.router import send_ops_alert
-
-        send_ops_alert(db, f"⚠️ B-Quant data stale: {detail}")
-    except Exception:
-        pass
     return False
