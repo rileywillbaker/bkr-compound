@@ -19,6 +19,7 @@ _weekend_or_closed(), so Saturdays/Sundays see no ingestion, no LLM calls,
 and no alerts even if a cron entry is misconfigured.
 """
 
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -52,6 +53,13 @@ def _scan_symbols() -> list[str]:
         return get_scan_symbols(db)
 
 
+# The boot-time run (scheduler/run.py) and the scheduled 08:30 run can
+# overlap when the rate-limited universe sweep runs long (e.g. the host
+# slept mid-run); two concurrent sweeps halve each other's rate budget and
+# can take days. Second entrant just skips.
+_premarket_running = threading.Lock()
+
+
 def job_premarket_discovery() -> None:
     """08:30 ET: full-universe ingest, then build the day's candidate list.
 
@@ -62,6 +70,16 @@ def job_premarket_discovery() -> None:
     """
     if _weekend_or_closed():
         return
+    if not _premarket_running.acquire(blocking=False):
+        log.warning("pre-market ingest+discovery already running; skipping this run")
+        return
+    try:
+        _premarket_body()
+    finally:
+        _premarket_running.release()
+
+
+def _premarket_body() -> None:
     with _session() as db:
         try:
             ingest.ingest_bars(db, timeframe="1Day")

@@ -229,9 +229,16 @@ def _insider_clusters(
 
 def _volume_and_moves(
     db: Session, universe: set[str], p: DiscoveryParams
-) -> list[DiscoveryEvent]:
+) -> tuple[list[DiscoveryEvent], dict[str, float]]:
     """Unusual volume + outsized (macro-sensitive) 1-day moves, from daily
-    bars already in the DB — one query for the whole universe."""
+    bars already in the DB — one query for the whole universe.
+
+    Also returns a continuous per-symbol "activity" measure (volume ratio +
+    |move z-score|, even below the event thresholds) used as the ranking
+    tie-breaker in discover(). Without it, a batch of same-score events —
+    e.g. dozens of routine 8-K filings at a flat 1.0 — ties, and the
+    max_candidates cap degenerates into an alphabetical slice of the
+    universe (observed: candidates ABT..DLTR, all A-D names)."""
     cutoff = datetime.now(UTC) - timedelta(days=45)
     rows = db.execute(
         select(BarRow.symbol, BarRow.ts, BarRow.close, BarRow.volume)
@@ -244,22 +251,25 @@ def _volume_and_moves(
             series[symbol].append((float(close), int(volume)))
 
     events = []
+    activity: dict[str, float] = {}
     for symbol, points in series.items():
         if len(points) < 21:
             continue
         closes = [c for c, _ in points]
         volumes = [v for _, v in points]
         avg_vol = mean(volumes[-21:-1])
-        if avg_vol > 0 and volumes[-1] >= p.volume_ratio_min * avg_vol:
+        if avg_vol > 0:
             ratio = volumes[-1] / avg_vol
-            events.append(
-                DiscoveryEvent(
-                    symbol=symbol,
-                    kind="unusual_volume",
-                    detail=f"volume {ratio:.1f}x the 20-day average",
-                    score=min(2.5, ratio / 2),
+            activity[symbol] = activity.get(symbol, 0.0) + min(10.0, ratio)
+            if volumes[-1] >= p.volume_ratio_min * avg_vol:
+                events.append(
+                    DiscoveryEvent(
+                        symbol=symbol,
+                        kind="unusual_volume",
+                        detail=f"volume {ratio:.1f}x the 20-day average",
+                        score=min(2.5, ratio / 2),
+                    )
                 )
-            )
         returns = [
             closes[i] / closes[i - 1] - 1 for i in range(1, len(closes)) if closes[i - 1]
         ]
@@ -268,6 +278,7 @@ def _volume_and_moves(
             sigma = pstdev(hist)
             if sigma > 0:
                 z = (last - mean(hist)) / sigma
+                activity[symbol] = activity.get(symbol, 0.0) + min(10.0, abs(z))
                 if abs(z) >= p.move_zscore_min:
                     events.append(
                         DiscoveryEvent(
@@ -277,7 +288,7 @@ def _volume_and_moves(
                             score=min(2.5, abs(z) / 2),
                         )
                     )
-    return events
+    return events, activity
 
 
 def _fresh_filings(
@@ -315,11 +326,16 @@ def discover(db: Session, params: DiscoveryParams | None = None) -> DiscoveryRes
     p = params or DiscoveryParams()
     universe = set(get_universe(db)) - set(MARKET_SYMBOLS)
     events: list[DiscoveryEvent] = []
+    activity: dict[str, float] = {}
+    try:
+        vol_events, activity = _volume_and_moves(db, universe, p)
+        events.extend(vol_events)
+    except Exception:
+        log.exception("discovery trigger failed", trigger="_volume_and_moves")
     for trigger in (
         _earnings_surprises,
         _high_impact_news,
         _insider_clusters,
-        _volume_and_moves,
         _fresh_filings,
     ):
         try:
@@ -330,7 +346,9 @@ def discover(db: Session, params: DiscoveryParams | None = None) -> DiscoveryRes
     totals: dict[str, float] = defaultdict(float)
     for e in events:
         totals[e.symbol] += e.score
-    ranked = sorted(totals, key=lambda s: (-totals[s], s))
+    # Ties on summed event score (common: flat-score triggers like 8-K
+    # filings) break on real market activity, never on the alphabet.
+    ranked = sorted(totals, key=lambda s: (-totals[s], -activity.get(s, 0.0), s))
     candidates = ranked[: p.max_candidates]
 
     result = DiscoveryResult(
@@ -386,7 +404,13 @@ def get_scan_symbols(db: Session) -> list[str]:
     longer limits anything — it only guarantees its names are always scanned."""
     from sentinel.db.settings_store import get_watchlist
 
-    return sorted(set(get_candidates(db)) | set(get_watchlist(db)) | set(held_symbols(db)))
+    candidates = get_candidates(db)
+    if not candidates:
+        log.warning(
+            "no fresh discovery candidates (discovery hasn't run in >30h?); "
+            "scan set falls back to watchlist + held positions only"
+        )
+    return sorted(set(candidates) | set(get_watchlist(db)) | set(held_symbols(db)))
 
 
 def insider_net_shares(db: Session, symbol: str, days: int = 90) -> int | None:
