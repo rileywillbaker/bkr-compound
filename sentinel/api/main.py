@@ -100,6 +100,7 @@ def _register_routers(app: FastAPI) -> None:
         risk,
         signals,
         system,
+        trading,
     )
 
     app.include_router(auth.router)
@@ -112,6 +113,7 @@ def _register_routers(app: FastAPI) -> None:
         risk,
         pipeline,
         signals,
+        trading,
         alerts,
         chat,
         analytics,

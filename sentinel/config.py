@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     edgar_user_agent: str = "B-Quant/0.1 (contact@example.com)"
+    finviz_auth_token: str = ""  # Finviz Elite export auth token
+    fintel_api_key: str = ""
 
     # --- trading parameters ---
     starting_equity: float = Field(default=10_000, gt=0)
@@ -45,6 +47,9 @@ class Settings(BaseSettings):
     # --- alerting (spec §6) ---
     alert_confidence_threshold: float = Field(default=0.80, ge=0, le=1)
     max_alerts_per_day: int = Field(default=5, ge=0)
+    # Swing-book alerts have their own daily cap, separate from the core cap
+    # above, so a busy swing day can't starve the long-term alerts.
+    swing_max_alerts_per_day: int = Field(default=3, ge=0)
 
     # --- LLM budget ---
     # Dollar cap is authoritative (models.yaml policy.daily_cost_budget_usd

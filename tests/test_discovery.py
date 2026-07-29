@@ -15,9 +15,11 @@ from sentinel.db.models import (
     BarRow,
     EarningsCalendarRow,
     FilingRow,
+    FundamentalsRow,
     InsiderTransactionRow,
     NewsItemRow,
     Position,
+    ShortInterestRow,
     SystemEvent,
 )
 from sentinel.db.settings_store import get_setting, set_setting, set_watchlist
@@ -207,6 +209,207 @@ def test_scan_symbols_union(db):
     # candidates + highlighted watchlist + held positions — never capped by
     # the watchlist
     assert get_scan_symbols(db) == ["AAPL", "NVDA", "RGTI"]
+
+
+def test_pullback_from_high_trigger(db):
+    """The MU case: a stock trading well below its 52-week high with no
+    single unusual day — unusual_volume/macro_move structurally miss this,
+    since the drawdown built up gradually over weeks."""
+    _seed_bars(db, "MU")  # flat series ending at ~103ish, no volume/move spike
+    last_close = (
+        db.query(BarRow.close)
+        .filter(BarRow.symbol == "MU")
+        .order_by(BarRow.ts.desc())
+        .first()[0]
+    )
+    db.add(FundamentalsRow(symbol="MU", week52_high=float(last_close) * 1.4))
+    db.flush()
+    result = discover(db)
+    assert "MU" in result.candidates
+    [event] = [e for e in result.events if e.kind == "pullback_from_high"]
+    assert "below its 52-week high" in event.detail
+
+
+def test_pullback_from_high_ignored_outside_threshold_band(db):
+    _seed_bars(db, "MU")
+    last_close = (
+        db.query(BarRow.close)
+        .filter(BarRow.symbol == "MU")
+        .order_by(BarRow.ts.desc())
+        .first()[0]
+    )
+    # only 5% off the high — below the default 15% floor
+    db.add(FundamentalsRow(symbol="MU", week52_high=float(last_close) * 1.05))
+    db.flush()
+    result = discover(db)
+    assert not [e for e in result.events if e.kind == "pullback_from_high"]
+
+
+def test_elevated_short_interest_trigger(db):
+    _seed_bars(db, "AMD")
+    db.add(ShortInterestRow(symbol="AMD", as_of=date.today(), short_percent_float=22.5))
+    db.flush()
+    result = discover(db)
+    assert "AMD" in result.candidates
+    [event] = [e for e in result.events if e.kind == "elevated_short_interest"]
+    assert "22.5%" in event.detail
+
+
+def test_finviz_trigger_silently_skipped_when_not_configured(db):
+    """No finviz auth token is configured in tests — the trigger must fail
+    closed (CredentialsMissing, caught internally) rather than raise or make
+    a real network call."""
+    result = discover(db)
+    assert not [e for e in result.events if e.kind == "finviz_screen"]
+
+
+# ------------------------------------------------- momentum / trend family ----
+def _seed_series(db, symbol, closes, volumes=None):
+    """Explicit close series so trend/pullback shapes are exact, not incidental."""
+    base_ts = datetime.now(UTC).replace(hour=21, minute=0, second=0, microsecond=0)
+    n = len(closes)
+    for i, close in enumerate(closes):
+        vol = (volumes or [1_000_000] * n)[i]
+        db.add(
+            BarRow(
+                symbol=symbol,
+                timeframe="1Day",
+                ts=base_ts - timedelta(days=n - i),
+                open=close,
+                high=close * 1.01,
+                low=close * 0.99,
+                close=close,
+                volume=vol,
+            )
+        )
+    db.flush()
+
+
+def test_relative_strength_trigger(db):
+    """Outperforming the benchmark while still in its own uptrend — free, and
+    the most durable screen there is."""
+    _seed_series(db, "SPY", [100.0] * 100)  # benchmark goes nowhere
+    _seed_series(db, "NVDA", [100.0 + i * 0.5 for i in range(100)])  # steady climb
+    result = discover(db)
+    [event] = [e for e in result.events if e.kind == "relative_strength"]
+    assert event.symbol == "NVDA"
+    assert "outperformed the benchmark" in event.detail
+    assert "NVDA" in result.candidates
+
+
+def test_relative_strength_needs_the_benchmark(db):
+    """Without SPY bars there is nothing to be strong *relative to* — the
+    trigger must stay silent rather than guess."""
+    _seed_series(db, "NVDA", [100.0 + i * 0.5 for i in range(100)])
+    result = discover(db)
+    assert not [e for e in result.events if e.kind == "relative_strength"]
+
+
+def test_breakout_trigger_requires_volume(db):
+    """A quiet drift to a new high is not a breakout."""
+    closes = [100.0 + i * 0.1 for i in range(40)]
+    _seed_series(db, "AMD", closes, volumes=[1_000_000] * 39 + [2_000_000])
+    result = discover(db)
+    [event] = [e for e in result.events if e.kind == "breakout"]
+    assert event.symbol == "AMD" and "2.0x average volume" in event.detail
+
+    _seed_series(db, "MSFT", closes)  # same shape, flat volume
+    result = discover(db)
+    assert not [e for e in result.events if e.symbol == "MSFT" and e.kind == "breakout"]
+
+
+def test_uptrend_pullback_trigger(db):
+    """Dip below the 20-day average with the 200-day trend intact — buying
+    strength on sale rather than catching a falling knife."""
+    climb = [100.0 + i * 0.5 for i in range(230)]  # ends ~215, 200-day SMA well below
+    dip = [climb[-1] * (1 - 0.10)] * 15  # 10% off the high, holds there
+    _seed_series(db, "AAPL", climb + dip)
+    result = discover(db)
+    [event] = [e for e in result.events if e.kind == "uptrend_pullback"]
+    assert event.symbol == "AAPL"
+    assert "still above the 200-day" in event.detail
+
+
+def test_earnings_revision_streak_trigger(db):
+    for months_ago, (actual, estimate) in enumerate([(1.3, 1.0), (1.2, 1.0), (1.1, 1.0)]):
+        db.add(
+            EarningsCalendarRow(
+                symbol="MSFT",
+                date=date.today() - timedelta(days=90 * (months_ago + 1)),
+                eps_estimate=estimate,
+                eps_actual=actual,
+            )
+        )
+    db.flush()
+    result = discover(db)
+    [event] = [e for e in result.events if e.kind == "earnings_revision"]
+    assert "3 consecutive quarterly EPS beats" in event.detail
+
+
+def test_a_single_beat_is_not_a_streak(db):
+    db.add(
+        EarningsCalendarRow(
+            symbol="MSFT",
+            date=date.today() - timedelta(days=90),
+            eps_estimate=1.0,
+            eps_actual=1.1,
+        )
+    )
+    db.flush()
+    result = discover(db)
+    assert not [e for e in result.events if e.kind == "earnings_revision"]
+
+
+# ------------------------------------------------------------ quality gate ----
+def test_quality_gate_drops_penny_stocks(db):
+    """The gate runs after ranking: an event-rich penny stock still never
+    reaches the candidate list."""
+    _seed_series(db, "AAPL", [0.80] * 40, volumes=[50_000_000] * 39 + [200_000_000])
+    result = discover(db)
+    assert any(e.symbol == "AAPL" for e in result.events)  # it did trigger
+    assert "AAPL" not in result.candidates  # but it is not tradeable
+    events = db.query(SystemEvent).filter(SystemEvent.kind == "discovery.run").all()
+    assert events[-1].payload["quality_gate_dropped"] >= 1
+
+
+def test_quality_gate_drops_illiquid_names(db):
+    _seed_series(db, "AAPL", [50.0] * 40, volumes=[100] * 39 + [1_000])
+    result = discover(db)
+    assert "AAPL" not in result.candidates
+
+
+def test_quality_gate_fails_open_with_no_bars(db):
+    """A brand-new symbol (e.g. from the market-wide Finviz screen) has no
+    bars yet. "No data" is not evidence of poor quality — the screener and the
+    risk engine both fail CLOSED later."""
+    db.add(
+        EarningsCalendarRow(
+            symbol="AAPL", date=date.today(), eps_estimate=1.00, eps_actual=1.30
+        )
+    )
+    db.flush()
+    result = discover(db)
+    assert "AAPL" in result.candidates
+
+
+def test_focus_set_ranks_the_universe_without_any_provider_call(db):
+    """The pre-ingest funnel: bars are cheap and cover everything, so the
+    expensive per-symbol pulls get pointed at this shortlist instead."""
+    from sentinel.data.discovery import get_deep_data_symbols, technical_focus_set
+
+    _seed_series(db, "SPY", [100.0] * 100)
+    _seed_series(db, "NVDA", [100.0 + i * 0.5 for i in range(100)])  # leader
+    _seed_series(db, "KO", [100.0 - i * 0.2 for i in range(100)])  # laggard
+
+    focus = technical_focus_set(db, limit=1)
+    assert focus == ["NVDA"]
+
+    set_watchlist(db, ["MSFT"])
+    db.add(Position(symbol="AAPL", shares=5, cost_basis=100))
+    db.flush()
+    # the shortlist never replaces what you told it to watch, or what you hold
+    deep = get_deep_data_symbols(db, focus_limit=1)
+    assert {"NVDA", "MSFT", "AAPL"} <= set(deep)
 
 
 def test_insider_net_shares(db):

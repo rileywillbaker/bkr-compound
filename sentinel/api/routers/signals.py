@@ -37,6 +37,7 @@ def _signal_dict(row: SignalRow) -> dict:
         "time_horizon": row.time_horizon,
         "strategy": row.strategy,
         "regime": row.regime,
+        "book": row.book,
         "explanation": row.explanation,
         "deterministic_only": row.deterministic_only,
         "alert_sent": row.alert_sent,
@@ -52,10 +53,20 @@ def signals(
     decision: str | None = None,
     since: datetime | None = None,
     limit: int = Query(default=100, le=500),
+    book: str = "core",
     db: Session = Depends(get_db),
 ) -> dict:
+    # Defaults to the long-term ("core") book so the swing feed stays separate;
+    # pass book="" (or a specific book) to widen. Swing setups live in the
+    # dedicated Swing Trading tab (/api/trading).
     rows = list_signals(
-        db, ticker=ticker, action=action, decision=decision, since=since, limit=limit
+        db,
+        ticker=ticker,
+        action=action,
+        decision=decision,
+        since=since,
+        limit=limit,
+        book=book or None,
     )
     return {"signals": [_signal_dict(r) for r in rows], "disclaimer": DISCLAIMER}
 

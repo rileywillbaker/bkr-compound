@@ -28,6 +28,9 @@ CREDENTIAL_FIELDS: dict[str, dict[str, str]] = {
     "anthropic": {"api_key": "anthropic_api_key"},
     "telegram": {"bot_token": "telegram_bot_token", "chat_id": "telegram_chat_id"},
     "edgar": {"user_agent": "edgar_user_agent"},
+    "finviz": {"auth_token": "finviz_auth_token"},
+    "fintel": {"api_key": "fintel_api_key"},
+    # yahoo is intentionally absent: no signup, no key, always available.
 }
 
 

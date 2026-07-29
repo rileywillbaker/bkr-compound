@@ -67,6 +67,87 @@ Phase status per `claude-code-master-prompt.md` §10.
   on /api) + security headers middleware; docs/PRODUCTION_CHECKLIST.md;
   SETUP.md backup section. Remaining: final end-to-end verification needs
   Docker Desktop installed by the user (containers, hypertables, live keys).
+- 2026-07-24 — User feedback: the pre-open brief (regime + a plain watchlist
+  price list) wasn't actionable — it wouldn't have caught MU's drift from a
+  $1,200 52-week high down to ~$840, since B-Quant's existing discovery
+  triggers (unusual_volume, macro_move) only look at single-day anomalies,
+  never a gradual multi-week drawdown. Added: (1) a `pullback_from_high`
+  discovery trigger using fundamentals already in the DB — zero new keys —
+  plus an `elevated_short_interest` trigger; (2) three new optional provider
+  integrations following the existing ABC/registry/credentials pattern —
+  Yahoo (`OverviewProvider`, keyless, fills fundamentals gaps; unofficial
+  endpoint, degrades gracefully), Finviz Elite (`ScreenerProvider`, one
+  export call screens the *whole* market for a 52-week-high pullback, not
+  just the static ~500-name universe — the main new "discover it early"
+  capability; requires a paid Elite subscription), Fintel (`InstitutionalDataProvider`,
+  short interest / dark-pool; requires a paid API plan, and Fintel's public
+  docs don't fully enumerate endpoints logged-out, so treat it like the
+  options-flow stub — wired per spec, live-verified once a real key is
+  pasted); (3) `short_interest` table + migration 0008, `ingest_short_interest`
+  scoped to the day's scan set (not full-universe, since Fintel's rate limits
+  aren't published); (4) pre-open brief now leads with an "Opportunities"
+  section (why a symbol was flagged) instead of just prices. Settings →
+  Providers gained Finviz/Fintel cards (Yahoo needs no card — always on).
+  226 tests green, ruff/mypy clean, frontend build clean.
+- 2026-07-29 — Cost-optimization pass. Goal: operating cost as close to $0 as
+  possible without weakening recommendation quality or the risk architecture.
+  **The single biggest change**: the pipeline used to spend ~7 LLM calls per
+  screened candidate (five analysts + strategy tie-break + synthesis narrative)
+  on every one of the three daily core scans and both daily swing scans. It now
+  spends ONE cached call per *finalist* — a name that already passed every
+  deterministic filter AND the risk engine. Details:
+  (1) `sentinel/modes.py` — three operating modes (free / smart / research)
+  stored in app_settings; mode governs automatic spend only and never touches
+  the risk engine, sizing, or any deterministic output. Free mode is
+  structurally incapable of making a call.
+  (2) `sentinel/agents/review.py` — the single combined review call. Returns a
+  categorical stance from a fixed enum plus prose; code owns the stance→number
+  mapping and it is one-directional (confirm 1.0 / caution 0.85 / reject →
+  NO_TRADE). A review can only make the system more conservative. The
+  synthesizer's dedicated explanation call was deleted entirely.
+  (3) `sentinel/pipeline/graph.py` restructured into an explicit funnel with a
+  `risk_prefilter` node BEFORE the LLM stage — purely economic, so tokens are
+  never spent on a trade the engine would veto. The terminal `risk_gate` is
+  unchanged and remains the only authority.
+  (4) `sentinel/pipeline/triggers.py` — event-based gating (earnings, filings,
+  news, breakout, pullback, volume, insider cluster, momentum, open position,
+  high conviction, user request) plus a hard per-scan cap, so a chaotic market
+  day cannot blow the budget.
+  (5) `sentinel/data/cache.py` + migration 0010 (`cache_entries`) — TTLs for
+  provider data that barely changes (fundamentals 7d, profile 30d, earnings
+  calendar 20h, short interest 3d, filing summaries 90d) and fingerprinted LLM
+  reviews so an unchanged situation is never re-analyzed at cost. Nightly purge.
+  (6) Universe expanded from ~500 to 600+: `config/universe_*.csv` are now
+  globbed and unioned (S&P 500 + Nasdaq-100 + liquid large caps). Cost-neutral
+  because every full-universe stage is arithmetic over stored bars. Screener
+  gained quality/liquidity floors (cap ≥ $2B, sector known, 200+ bars) that
+  exclude penny/OTC/micro-cap/thin-data names, plus a relative-strength factor.
+  (7) Ingestion tiered: bars/macro/calendar cover the full universe; the
+  expensive per-symbol pulls (news, filings, insiders, fundamentals) target a
+  deterministic focus set (~60, `technical_focus_set`) ∪ candidates ∪ watchlist
+  ∪ holdings. `full_universe_deep_ingest` restores the old sweep.
+  (8) `sentinel/portfolio/manager.py` — deterministic portfolio manager (EXIT /
+  REDUCE / TAKE_PARTIAL_PROFITS / TIGHTEN_STOP / INCREASE / HOLD / NO_ACTION).
+  Runs in every mode including Free; any exposure-increasing suggestion is
+  cleared by the risk engine first. Exits become SELL signals through the normal
+  persistence/gate/alert path — previously nothing generated SELLs at all.
+  (9) Discovery gained relative_strength, breakout, uptrend_pullback,
+  sector_leadership and earnings_revision triggers (all from stored bars +
+  earnings calendar, zero new keys) and a quality gate that fails OPEN on
+  missing data.
+  (10) LLM client gained a daily call-count backstop and `budget_status()`;
+  models.yaml gained a `review` role (Sonnet — one good judgement beats five
+  cheap ones when you only make three a day) and dropped the daily cap to $0.25.
+  (11) API: `/api/settings/modes`, `PUT /api/settings/mode`,
+  `PUT /api/settings/ingest-scope`, `GET /api/portfolio/review`,
+  `POST /api/pipeline/research`, `GET /api/system/budget`. Frontend: operating
+  mode selector, position-management panel, live AI-budget panel. New chat tool
+  `portfolio_review`.
+  Docs: `docs/COST_MODEL.md`, plus a Free-mode note in SETUP.md (the Anthropic
+  key is now optional). 321 tests green (was 226), ruff/mypy clean, frontend
+  build clean. Unchanged: no trade execution, risk engine purity and absolute
+  veto, no LLM output in any trade parameter, NO TRADE as a first-class outcome.
+  Deployment note: migration 0010 must run and the image be rebuilt.
 - 2026-07-07 — Pre-Docker smoke test: booted the real app (SQLite, TestClient)
   serving the real built SPA — 14/14 checks passed (health, SPA, auth,
   settings, encrypted+masked credentials, risk profile, manual trade +

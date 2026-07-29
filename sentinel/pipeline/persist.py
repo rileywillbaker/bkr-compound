@@ -24,6 +24,7 @@ def save_signals(db: Session, state: PipelineState) -> list[SignalRow]:
             id=str(signal.id),
             created_at=signal.created_at,
             run_id=str(state.run_id),
+            book=signal.book,
             ticker=signal.ticker,
             action=signal.action,
             shares=signal.shares,
@@ -75,6 +76,7 @@ def list_signals(
     decision: str | None = None,
     since: datetime | None = None,
     limit: int = 100,
+    book: str | None = None,
 ) -> list[SignalRow]:
     query = select(SignalRow).order_by(SignalRow.created_at.desc()).limit(limit)
     if ticker:
@@ -85,6 +87,8 @@ def list_signals(
         query = query.where(SignalRow.user_decision == decision)
     if since:
         query = query.where(SignalRow.created_at >= since)
+    if book:
+        query = query.where(SignalRow.book == book)
     return list(db.execute(query).scalars().all())
 
 

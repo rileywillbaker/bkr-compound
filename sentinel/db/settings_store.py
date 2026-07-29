@@ -24,6 +24,13 @@ WATCHLIST_KEY = "watchlist"
 STARTING_EQUITY_KEY = "starting_equity"
 QUIET_HOURS_KEY = "alert_quiet_hours"  # {"start": "22:00", "end": "07:00"} ET
 ONBOARDED_KEY = "onboarding_complete"
+# When True, the pre-market job fetches news/filings/insiders/fundamentals for
+# EVERY universe ticker instead of the deterministically-ranked focus set.
+# Off by default: it multiplies provider calls by ~10 for a marginal gain,
+# since the technical triggers already sweep the full universe from bars.
+FULL_UNIVERSE_DEEP_INGEST_KEY = "full_universe_deep_ingest"
+FOCUS_SET_SIZE_KEY = "focus_set_size"
+DEFAULT_FOCUS_SET_SIZE = 60
 
 
 def get_setting(db: Session, key: str, default: Any = None) -> Any:
@@ -65,3 +72,14 @@ def get_starting_equity(db: Session) -> float:
 
 def is_onboarded(db: Session) -> bool:
     return bool(get_setting(db, ONBOARDED_KEY, False))
+
+
+def full_universe_deep_ingest(db: Session) -> bool:
+    return bool(get_setting(db, FULL_UNIVERSE_DEEP_INGEST_KEY, False))
+
+
+def focus_set_size(db: Session) -> int:
+    stored = get_setting(db, FOCUS_SET_SIZE_KEY)
+    if isinstance(stored, (int, float)) and stored > 0:
+        return int(stored)
+    return DEFAULT_FOCUS_SET_SIZE

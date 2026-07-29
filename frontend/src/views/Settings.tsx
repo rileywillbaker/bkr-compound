@@ -1,11 +1,82 @@
-// Settings (spec §7.7): versioned risk-profile editor, watchlist manager,
-// equity, alert quiet hours, and provider API keys. Risk limits change ONLY
-// here — never automatically.
+// Settings (spec §7.7): operating mode (cost control), versioned risk-profile
+// editor, watchlist manager, equity, alert quiet hours, and provider API keys.
+// Risk limits change ONLY here — never automatically.
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { api, AppSettings } from "../lib/api";
+import { api, AppSettings, ModeOption, OperatingMode } from "../lib/api";
 import ProviderKeys from "../components/ProviderKeys";
 import { Button, Card, ErrorNote, Field, Spinner, inputClass } from "../components/ui";
+
+function OperatingModeCard({
+  current,
+  onChange,
+}: {
+  current: OperatingMode;
+  onChange: (mode: OperatingMode) => void;
+}) {
+  const [options, setOptions] = useState<ModeOption[]>([]);
+  const [saving, setSaving] = useState<OperatingMode | null>(null);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    api
+      .get<{ current: OperatingMode; modes: ModeOption[] }>("/api/settings/modes")
+      .then((r) => setOptions(r.modes))
+      .catch(() => setOptions([]));
+  }, []);
+
+  const select = async (mode: OperatingMode) => {
+    setSaving(mode);
+    setNote("");
+    try {
+      await api.put("/api/settings/mode", { mode });
+      onChange(mode);
+      setNote("Saved. It applies from the next scan onwards.");
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "save failed");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <Card title="Operating mode">
+      <p className="mb-3 text-xs text-slate-500">
+        How much AI the system is allowed to buy on its own. Everything deterministic — screening,
+        technicals, discovery, position sizing, the risk engine, portfolio management, alerts and
+        the daily briefs — runs identically in all three modes. Only the written analysis changes.
+      </p>
+      <div className="grid gap-3 lg:grid-cols-3">
+        {options.map((o) => {
+          const active = o.mode === current;
+          return (
+            <button
+              key={o.mode}
+              type="button"
+              onClick={() => select(o.mode)}
+              disabled={saving !== null}
+              className={`rounded-lg border p-3 text-left transition ${
+                active
+                  ? "border-sky-500 bg-sky-500/10"
+                  : "border-slate-800 hover:border-slate-600"
+              } disabled:opacity-60`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-semibold">{o.label}</span>
+                {active && <span className="text-xs text-sky-400">active</span>}
+              </div>
+              <p className="mt-1 text-xs text-slate-400">{o.description}</p>
+              <p className="mt-2 font-mono text-[11px] text-slate-500">
+                scheduled scans: {o.scan_depth === "none" ? "no AI" : `${o.scan_depth}, max ${o.max_llm_candidates_per_scan}/scan`}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+      {note && <p className="mt-3 text-sm text-slate-400">{note}</p>}
+    </Card>
+  );
+}
 
 const RISK_FIELD_LABELS: Record<string, string> = {
   risk_per_trade_pct: "Risk per trade (% of equity)",
@@ -145,11 +216,21 @@ export default function Settings() {
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Settings</h1>
 
+      <OperatingModeCard
+        current={settings.operating_mode}
+        onChange={(mode) => setSettings({ ...settings, operating_mode: mode })}
+      />
+
       <Card title="General">
         <form onSubmit={saveGeneral} className="space-y-3">
-          <Field label="Watchlist (comma-separated tickers the pipeline scans)">
+          <Field label="Watchlist (tickers you always want scanned and shown — it does not limit the universe)">
             <input className={inputClass} value={watchlist} onChange={(e) => setWatchlist(e.target.value)} />
           </Field>
+          <p className="text-xs text-slate-500">
+            The system screens {settings.universe_size.toLocaleString()} stocks every scan (
+            {settings.universe_files.join(", ")}) regardless of this list. Screening is
+            deterministic, so a wider universe costs nothing.
+          </p>
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Starting equity (USD)">
               <input className={inputClass} value={equity} onChange={(e) => setEquity(e.target.value)} inputMode="decimal" />

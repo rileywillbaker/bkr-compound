@@ -10,9 +10,13 @@ from sqlalchemy.orm import Session
 
 from sentinel.db.base import get_db
 from sentinel.db.settings_store import (
+    FOCUS_SET_SIZE_KEY,
+    FULL_UNIVERSE_DEEP_INGEST_KEY,
     ONBOARDED_KEY,
     QUIET_HOURS_KEY,
     STARTING_EQUITY_KEY,
+    focus_set_size,
+    full_universe_deep_ingest,
     get_setting,
     get_starting_equity,
     get_watchlist,
@@ -20,6 +24,7 @@ from sentinel.db.settings_store import (
     set_setting,
     set_watchlist,
 )
+from sentinel.modes import all_policies, get_mode, get_policy, set_mode
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -29,15 +34,76 @@ _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 @router.get("")
 def get_all(db: Session = Depends(get_db)) -> dict:
-    from sentinel.data.universe import load_static_universe
+    from sentinel.data.universe import load_static_universe, universe_files
 
+    policy = get_policy(db)
     return {
         # highlighted tickers only — the scan universe is the static list
         "watchlist": get_watchlist(db),
         "universe_size": len(load_static_universe()),
+        "universe_files": [p.name for p in universe_files()],
         "starting_equity": get_starting_equity(db),
         "alert_quiet_hours": get_setting(db, QUIET_HOURS_KEY),
         "onboarding_complete": is_onboarded(db),
+        "operating_mode": policy.mode,
+        "operating_mode_label": policy.label,
+        "full_universe_deep_ingest": full_universe_deep_ingest(db),
+        "focus_set_size": focus_set_size(db),
+    }
+
+
+@router.get("/modes")
+def list_modes(db: Session = Depends(get_db)) -> dict:
+    """Every operating mode plus the one in force — the cost control surface."""
+    return {
+        "current": get_mode(db),
+        "modes": [
+            {
+                "mode": p.mode,
+                "label": p.label,
+                "description": p.description,
+                "scan_depth": p.scan_depth,
+                "on_demand_depth": p.on_demand_depth,
+                "max_llm_candidates_per_scan": p.max_llm_candidates_per_scan,
+            }
+            for p in all_policies()
+        ],
+    }
+
+
+class ModeIn(BaseModel):
+    mode: str
+
+
+@router.put("/mode")
+def put_mode(body: ModeIn, db: Session = Depends(get_db)) -> dict:
+    """Switch operating mode. Takes effect on the next scan; nothing about the
+    risk engine or position sizing changes with it."""
+    try:
+        saved = set_mode(db, body.mode)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.commit()
+    policy = get_policy(db)
+    return {"operating_mode": saved, "label": policy.label, "description": policy.description}
+
+
+class IngestScopeIn(BaseModel):
+    full_universe_deep_ingest: bool | None = None
+    focus_set_size: int | None = Field(default=None, ge=10, le=500)
+
+
+@router.put("/ingest-scope")
+def put_ingest_scope(body: IngestScopeIn, db: Session = Depends(get_db)) -> dict:
+    """How wide the expensive per-symbol data pulls go each morning."""
+    if body.full_universe_deep_ingest is not None:
+        set_setting(db, FULL_UNIVERSE_DEEP_INGEST_KEY, body.full_universe_deep_ingest)
+    if body.focus_set_size is not None:
+        set_setting(db, FOCUS_SET_SIZE_KEY, body.focus_set_size)
+    db.commit()
+    return {
+        "full_universe_deep_ingest": full_universe_deep_ingest(db),
+        "focus_set_size": focus_set_size(db),
     }
 
 

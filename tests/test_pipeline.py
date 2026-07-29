@@ -2,7 +2,10 @@
 the DB, the full LangGraph run, mocked LLM everywhere (spec: mock LLM in CI).
 
 Covers the happy path (approved BUY), the risk-veto path, LLM-outage
-degradation, and the API router wiring.
+degradation, the API router wiring, and the cost architecture: Free mode makes
+no calls at all, Smart mode makes exactly one per finalist, an unchanged
+situation is served from cache, and a candidate the risk engine would veto
+never reaches the model.
 """
 
 from datetime import UTC, date, datetime, timedelta
@@ -12,6 +15,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from sentinel.agents import analysts as analysts_mod
+from sentinel.agents import review as review_mod
+from sentinel.agents.review import LLMReviewPayload
 from sentinel.agents.verdicts import EvidenceItem, LLMVerdictPayload
 from sentinel.api.main import create_app
 from sentinel.db.base import get_db
@@ -22,16 +27,23 @@ from sentinel.db.models import (
     MacroSeriesRow,
     SystemEvent,
 )
+from sentinel.modes import set_mode
 from sentinel.pipeline import runner
-from sentinel.pipeline import synthesizer as synthesizer_mod
 from sentinel.pipeline.runner import run_scan
-from sentinel.pipeline.synthesizer import _Explanation
 from sentinel.providers.llm.client import LLMError
 from sentinel.strategies import selector as selector_mod
 from sentinel.strategies.selector import _TieBreakVote
 from tests.synth import make_bars
 
 SYMBOLS = ["NVDA"]
+
+REVIEW_TEXT = "Mocked plain-English rationale citing the data."
+
+# Every module that can still reach an LLM. The synthesizer is deliberately
+# absent: its dedicated narrative call was removed — the single combined
+# review now supplies the explanation. Patching all of these and asserting the
+# call count is what proves the cost claims.
+LLM_MODULES = (analysts_mod, selector_mod, review_mod)
 
 
 def seed_bars(db, symbol, **kwargs):
@@ -73,11 +85,20 @@ def seeded(db):
     return db
 
 
-@pytest.fixture()
-def llm_ok(monkeypatch):
-    """One fake LLM serving all three call sites, dispatching on schema."""
+class FakeLLM:
+    """One fake LLM serving every call site, dispatching on schema, counting
+    calls. The count is the assertion that matters for the cost design."""
 
-    def fake(db, role, system, user, schema, endpoint=""):
+    def __init__(self, stance: str = "confirm"):
+        self.stance = stance
+        self.calls: list[str] = []
+
+    def __call__(self, db, role, system, user, schema, endpoint=""):
+        self.calls.append(endpoint or role)
+        if schema is LLMReviewPayload:
+            return LLMReviewPayload(
+                stance=self.stance, explanation=REVIEW_TEXT, key_risks=["mocked risk"]
+            )
         if schema is LLMVerdictPayload:
             return LLMVerdictPayload(
                 score=42,
@@ -85,14 +106,17 @@ def llm_ok(monkeypatch):
                 summary="mocked interpretation",
                 evidence=[EvidenceItem(source="mock", datapoint="mocked datapoint")],
             )
-        if schema is _Explanation:
-            return _Explanation(text="Mocked plain-English rationale citing the data.")
         if schema is _TieBreakVote:
             return _TieBreakVote(strategy="cash", reason="mock vote")
         raise AssertionError(f"unexpected schema {schema}")
 
-    for mod in (analysts_mod, selector_mod, synthesizer_mod):
+
+@pytest.fixture()
+def llm_ok(monkeypatch):
+    fake = FakeLLM()
+    for mod in LLM_MODULES:
         monkeypatch.setattr(mod, "complete_json", fake)
+    return fake
 
 
 @pytest.fixture()
@@ -100,7 +124,7 @@ def llm_down(monkeypatch):
     def fake(*args, **kwargs):
         raise LLMError("outage")
 
-    for mod in (analysts_mod, selector_mod, synthesizer_mod):
+    for mod in LLM_MODULES:
         monkeypatch.setattr(mod, "complete_json", fake)
 
 
@@ -115,11 +139,17 @@ def test_golden_run_produces_approved_buy(seeded, llm_ok):
     assert signal.action == "BUY"
     assert signal.strategy == "momentum-swing"
     assert signal.time_horizon == "swing_days"
-    assert signal.explanation == "Mocked plain-English rationale citing the data."
+    assert signal.explanation == REVIEW_TEXT
     assert not signal.deterministic_only
     assert 0 < signal.confidence < 1
     assert 1 <= signal.risk_score <= 10
     assert signal.evidence
+
+    # THE cost assertion: one finalist, one call — not five analysts plus a
+    # tie-break plus a synthesis narrative.
+    assert llm_ok.calls == ["review.candidate"]
+    assert state.llm_calls == 1
+    assert state.mode == "smart" and state.depth == "review"
 
     # numeric fields are consistent with deterministic sizing, never the LLM:
     snap = state.candidates["NVDA"].snapshot
@@ -190,11 +220,92 @@ def test_use_llm_false_never_touches_llm(seeded, monkeypatch):
     def boom(*args, **kwargs):
         raise AssertionError("LLM must not be called")
 
-    for mod in (analysts_mod, selector_mod, synthesizer_mod):
+    for mod in LLM_MODULES:
         monkeypatch.setattr(mod, "complete_json", boom)
     state = run_scan(seeded, symbols=SYMBOLS, use_llm=False)
     [signal] = state.signals
     assert signal.deterministic_only
+
+
+# --------------------------------------------------------------- cost ----
+def test_free_mode_makes_no_llm_calls_but_still_produces_a_signal(seeded, monkeypatch):
+    """Free mode's whole promise: a complete, risk-checked recommendation for
+    exactly $0."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("Free mode must never call an LLM")
+
+    for mod in LLM_MODULES:
+        monkeypatch.setattr(mod, "complete_json", boom)
+    set_mode(seeded, "free")
+
+    state = run_scan(seeded, symbols=SYMBOLS)
+    [signal] = state.signals
+    assert state.mode == "free" and state.depth == "none"
+    assert state.llm_calls == 0
+    assert signal.action == "BUY"
+    assert signal.deterministic_only
+    assert signal.risk_check is not None and signal.risk_check.approved
+    assert signal.shares and signal.shares > 0
+
+
+def test_identical_situation_is_served_from_cache(seeded, llm_ok):
+    """The second scan of an unchanged setup must cost nothing."""
+    first = run_scan(seeded, symbols=SYMBOLS)
+    second = run_scan(seeded, symbols=SYMBOLS)
+
+    assert first.llm_calls == 1
+    assert second.llm_calls == 0  # cache hit
+    assert len(llm_ok.calls) == 1
+    review = second.candidates["NVDA"].review
+    assert review is not None and review.from_cache
+    # a cached review still carries the narrative, so quality doesn't degrade
+    assert second.signals[0].explanation == REVIEW_TEXT
+    assert not second.signals[0].deterministic_only
+
+
+def test_risk_vetoed_candidate_never_reaches_the_llm(seeded, llm_ok):
+    """Tokens are never spent interpreting a trade that cannot happen."""
+    seeded.add(EarningsCalendarRow(symbol="NVDA", date=date.today() + timedelta(days=1)))
+    seeded.flush()
+
+    state = run_scan(seeded, symbols=SYMBOLS)
+    assert llm_ok.calls == []
+    assert state.llm_calls == 0
+    assert state.funnel["risk_approved"] == 0
+    [signal] = state.signals
+    assert signal.deterministic_only
+    assert not signal.risk_check.approved
+
+
+def test_review_reject_stance_downgrades_to_no_trade(seeded, monkeypatch):
+    """The stance may only stand a trade DOWN. 'reject' turns an otherwise
+    approved BUY into NO_TRADE; it can never do the reverse."""
+    fake = FakeLLM(stance="reject")
+    for mod in LLM_MODULES:
+        monkeypatch.setattr(mod, "complete_json", fake)
+
+    state = run_scan(seeded, symbols=SYMBOLS)
+    [signal] = state.signals
+    assert signal.action == "NO_TRADE"
+    assert signal.confidence == 0.0
+    assert not signal.actionable
+
+
+def test_funnel_is_recorded_for_audit(seeded, llm_ok):
+    state = run_scan(seeded, symbols=SYMBOLS)
+    assert state.funnel["universe"] == 1
+    assert state.funnel["screened"] == 1
+    assert state.funnel["sized"] == 1
+    assert state.funnel["risk_approved"] == 1
+    assert state.funnel["llm_reviewed"] == 1
+
+    [event] = seeded.execute(
+        select(SystemEvent).where(SystemEvent.kind == "pipeline.run")
+    ).scalars().all()
+    assert event.payload["mode"] == "smart"
+    assert event.payload["llm_calls"] == 1
+    assert event.payload["funnel"]["risk_approved"] == 1
 
 
 def test_pipeline_router(seeded, llm_ok):

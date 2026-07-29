@@ -74,12 +74,26 @@ gracefully and marks those factors "unavailable".
    <https://fred.stlouisfed.org/docs/api/api_key.html> → **Request API Key**.
 3. Describe the use ("personal research") and copy the 32-character key.
 
-### Anthropic (LLM analysis)
+### Anthropic (LLM analysis) — optional
+
+**You can skip this entirely.** Set **Settings → Operating mode → Free** and
+B-Quant makes no AI calls at all: screening across the full universe,
+technicals, discovery, position sizing, the risk engine, portfolio management,
+alerts and the daily briefs all still run, and every recommendation still
+carries the same numbers. What you give up is the written explanation and the
+advisory second opinion — not the recommendation itself.
+
+If you do want the narrative:
 
 1. Go to <https://console.anthropic.com> and create an account.
-2. Add a small amount of billing credit (Settings → Billing). Typical usage is
-   cents per day; B-Quant enforces a hard daily token budget.
+2. Add a small amount of billing credit (Settings → Billing). In the default
+   Smart mode the system makes at most a handful of calls per trading day, and
+   never repeats one on an unchanged situation — expect single-digit cents per
+   day. Three independent hard caps (dollars, call count, tokens) stop it
+   running away; hitting any of them degrades to deterministic-only output
+   rather than skipping recommendations. See `docs/COST_MODEL.md`.
 3. **Settings → API Keys → Create Key**, copy the `sk-ant-...` value.
+4. Watch actual spend at **System → AI budget today**.
 
 ### Telegram (alerts)
 
@@ -97,6 +111,47 @@ gracefully and marks those factors "unavailable".
 The SEC requires a descriptive User-Agent containing contact info. Set
 `EDGAR_USER_AGENT` in `.env` (or the Settings UI) to something like
 `B-Quant/0.1 (you@example.com)`.
+
+### Yahoo Finance (overview data — no key, no signup)
+
+Fills gaps left by Finnhub's free-tier gating (analyst target price, forward
+P/E, etc.). There is nothing to configure — it's always on. It is an
+*unofficial* endpoint (Yahoo has published no public API since 2017), so
+treat it as best-effort: if Yahoo changes something upstream, this provider
+degrades gracefully rather than breaking a scan.
+
+### Finviz Elite (optional — whole-market screener for discovery)
+
+**Paid**: requires a Finviz Elite subscription (finviz.com/elite); the free
+tier has no data-export feature, so a free account's key will not work here.
+
+1. Subscribe at <https://finviz.com/elite>.
+2. Log in and open your account page on finviz.com.
+3. Find your Elite **auth token** (also visible in the URL whenever you use
+   the CSV export button on the screener page).
+4. Paste it into B-Quant's Settings → Providers → Finviz.
+
+What it buys you: B-Quant's built-in discovery already screens a static
+~500-name universe for pullbacks, unusual volume, insider buying, etc. Finviz
+screens the *entire* market in one call, so it can surface a stock B-Quant
+isn't tracking at all yet — this is the main way to "discover a stock early"
+rather than only re-analyzing the same fixed list every day.
+
+### Fintel (optional — short interest / institutional positioning)
+
+**Paid**: requires a Fintel plan with API access (see
+<https://fintel.io/api-developers> for current tiers).
+
+1. Log in to fintel.io, then open the developer dashboard at
+   <https://fintel.io/u/dev>.
+2. Click **Generate Key** and copy it.
+3. Paste it into B-Quant's Settings → Providers → Fintel.
+
+This adds short-interest data (and a "heavily shorted" discovery signal) for
+whatever B-Quant is scanning that day. Field availability — and whether
+dark-pool figures specifically are exposed via the API vs. only the Fintel
+website — depends on your plan tier; a partial "Test connection" result is
+normal and just means some fields aren't on your plan.
 
 ## 5. Login & remote access
 

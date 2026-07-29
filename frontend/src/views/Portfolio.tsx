@@ -1,8 +1,9 @@
 // Portfolio (spec §7.3): manual trade entry, live valuation, sector exposure,
-// recent fills. All fills are user-entered — B-Quant never executes trades.
+// position management, recent fills. All fills are user-entered — B-Quant
+// never executes trades.
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { api, PortfolioValuation } from "../lib/api";
+import { api, PortfolioValuation, PositionAction, PositionReview } from "../lib/api";
 import { Button, Card, ErrorNote, Field, Spinner, fmtMoney, fmtWhen, inputClass } from "../components/ui";
 
 interface Trade {
@@ -13,6 +14,81 @@ interface Trade {
   shares: number;
   price: number;
   note: string;
+}
+
+const ACTION_STYLE: Record<PositionAction, string> = {
+  EXIT: "bg-rose-500/15 text-rose-300 border-rose-500/40",
+  REDUCE: "bg-amber-500/15 text-amber-300 border-amber-500/40",
+  TAKE_PARTIAL_PROFITS: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
+  TIGHTEN_STOP: "bg-sky-500/15 text-sky-300 border-sky-500/40",
+  INCREASE: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
+  HOLD: "bg-slate-700/40 text-slate-300 border-slate-600",
+  NO_ACTION: "bg-slate-700/40 text-slate-400 border-slate-700",
+};
+
+function actionLabel(action: PositionAction): string {
+  return action.replace(/_/g, " ").toLowerCase();
+}
+
+function PositionManagement() {
+  const [reviews, setReviews] = useState<PositionReview[] | null>(null);
+
+  useEffect(() => {
+    api
+      .get<{ reviews: PositionReview[] }>("/api/portfolio/review")
+      .then((r) => setReviews(r.reviews))
+      .catch(() => setReviews([]));
+  }, []);
+
+  if (reviews === null) return <Spinner />;
+
+  return (
+    <Card title="Position management">
+      <p className="mb-3 text-xs text-slate-500">
+        Deterministic review of every open position — no AI involved, so it runs in every mode
+        including Free. Anything that would add exposure has already passed the risk engine.
+        Recommendations only; nothing is executed.
+      </p>
+      {reviews.length === 0 ? (
+        <p className="text-sm text-slate-500">No open positions to manage yet.</p>
+      ) : (
+        <ul className="space-y-2">
+          {reviews.map((r) => (
+            <li key={r.symbol} className="rounded-lg border border-slate-800 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono font-semibold">{r.symbol}</span>
+                <span className={`rounded-full border px-2 py-0.5 text-xs uppercase ${ACTION_STYLE[r.action]}`}>
+                  {actionLabel(r.action)}
+                </span>
+                {r.shares_delta !== 0 && (
+                  <span className="text-xs text-slate-400">
+                    {r.shares_delta < 0 ? "sell" : "add"} {Math.abs(r.shares_delta)} of {r.shares}
+                  </span>
+                )}
+                {r.r_multiple !== null && (
+                  <span className="text-xs text-slate-400">{r.r_multiple.toFixed(2)}R</span>
+                )}
+                <span className={`text-xs ${r.unrealized_pct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                  {r.unrealized_pct >= 0 ? "+" : ""}
+                  {r.unrealized_pct.toFixed(1)}%
+                </span>
+                {r.suggested_stop !== null && (
+                  <span className="ml-auto text-xs text-slate-500">
+                    suggested stop {fmtMoney(r.suggested_stop)}
+                  </span>
+                )}
+              </div>
+              <ul className="mt-1.5 list-disc pl-5 text-xs text-slate-400">
+                {r.reasons.map((reason, i) => (
+                  <li key={i}>{reason}</li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
 }
 
 export default function Portfolio() {
@@ -128,6 +204,8 @@ export default function Portfolio() {
           </div>
         )}
       </Card>
+
+      <PositionManagement />
 
       <Card title="Record a fill (manual entry)">
         <form onSubmit={submit} className="grid gap-3 sm:grid-cols-5">

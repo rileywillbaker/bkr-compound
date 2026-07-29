@@ -2,17 +2,25 @@
 
 Schedule (all times America/New_York, NYSE calendar). Scans run exactly
 THREE times per trading day — there is no rolling intraday scan:
-  - 08:30 ET : pre-market ingest over the FULL universe (bars, news,
-               earnings, macro, insider txns, filings) + discovery run that
-               builds the day's candidate list + pre-open brief. Starts an
-               hour before the open because the rate-limited universe sweep
-               takes ~25 minutes. No signal alerts fire from this pass.
+  - 08:30 ET : tiered pre-market ingest + discovery + pre-open brief. Bars and
+               macro cover the FULL universe (cheap, and every technical
+               trigger needs them); the expensive per-symbol calls — news,
+               filings, insider transactions, fundamentals, quotes — are
+               pointed at a deterministically-ranked focus set instead, which
+               is what lets the universe grow past 700 names without the
+               rate-limit budget growing with it. Starts an hour before the
+               open because the rate-limited sweep takes a while. No signal
+               alerts fire from this pass.
   - 09:30 ET : market-open confirmation scan (candidates + watchlist +
                positions). Only BUY alerts may fire.
   - 15:30 ET : near-close exit scan. Only SELL alerts may fire.
   - every 5 min, market hours : staleness watchdog (no LLM, no alerts)
   - 16:45 ET trading days     : post-close ingest + recap
   - 02:00 ET mon-fri          : nightly evaluation (Phase 6)
+
+The SEPARATE swing book (sentinel/swing/) adds two of its own scans that do
+NOT touch the three core scans above: 09:45 ET (open) and 12:30 ET (midday),
+each running the swing pipeline with its own alert channel + daily cap.
 
 Weekends are fully dark: every job is cron'd mon-fri AND double-checked by
 _weekend_or_closed(), so Saturdays/Sundays see no ingestion, no LLM calls,
@@ -61,12 +69,10 @@ _premarket_running = threading.Lock()
 
 
 def job_premarket_discovery() -> None:
-    """08:30 ET: full-universe ingest, then build the day's candidate list.
+    """08:30 ET: tiered ingest, then build the day's candidate list.
 
     Order matters: discovery reads only the DB, so everything it needs must
-    land first. Fundamentals and quotes are then refreshed for just the scan
-    set (candidates + watchlist + positions) to stay inside free-tier rate
-    limits. No pipeline run, no signal alerts here.
+    land first. No pipeline run, no signal alerts here.
     """
     if _weekend_or_closed():
         return
@@ -80,27 +86,62 @@ def job_premarket_discovery() -> None:
 
 
 def _premarket_body() -> None:
+    # --- Tier 1: universe-wide, cheap. Bars power every technical trigger,
+    # every screen, and the whole discovery engine, so they always cover
+    # everything. Macro and the earnings calendar are single calls.
     with _session() as db:
         try:
             ingest.ingest_bars(db, timeframe="1Day")
-            ingest.ingest_news(db)
-            ingest.ingest_earnings_calendar(db)
             ingest.ingest_macro(db)
-            ingest.ingest_insider_transactions(db)
-            ingest.ingest_filings(db)
+            ingest.ingest_earnings_calendar(db)
             db.commit()
         except Exception:
             db.rollback()
-            log.exception("pre-market ingest failed")
+            log.exception("pre-market bar/macro ingest failed")
             return
+
+    # --- Tier 2: per-symbol and rate-limited. Scoped to the focus set —
+    # the deterministic technical shortlist plus yesterday's candidates, the
+    # watchlist and everything held. Set full_universe_deep_ingest to restore
+    # the old sweep-everything behaviour.
+    with _session() as db:
+        try:
+            from sentinel.data.discovery import get_deep_data_symbols
+            from sentinel.db.settings_store import focus_set_size, full_universe_deep_ingest
+
+            deep = (
+                None
+                if full_universe_deep_ingest(db)
+                else get_deep_data_symbols(db, focus_limit=focus_set_size(db))
+            )
+            log.info(
+                "pre-market deep ingest scope",
+                symbols="full universe" if deep is None else len(deep),
+            )
+            ingest.ingest_news(db, symbols=deep)
+            ingest.ingest_insider_transactions(db, symbols=deep)
+            ingest.ingest_filings(db, symbols=deep)
+            ingest.ingest_fundamentals(db, symbols=deep)
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("pre-market deep ingest failed")
+            # discovery can still run on bars alone — keep going
+
+    # --- Tier 3: discovery, then top up data for whatever it surfaced.
     with _session() as db:
         try:
             from sentinel.data.discovery import discover, get_scan_symbols
 
             discover(db)
             scan_set = get_scan_symbols(db)
+            # Bars again here (in addition to the full-universe pass above):
+            # a discovery trigger (e.g. finviz_screen) can surface a symbol
+            # outside the static universe that never got bars in that pass.
+            ingest.ingest_bars(db, timeframe="1Day", symbols=scan_set)
             ingest.ingest_fundamentals(db, symbols=scan_set)
             ingest.ingest_quotes(db, symbols=scan_set)
+            ingest.ingest_short_interest(db, symbols=scan_set)
             db.commit()
         except Exception:
             db.rollback()
@@ -150,6 +191,36 @@ def _run_pipeline_scan(alert_actions: frozenset[str]) -> None:
             log.exception("pipeline scan failed")
 
 
+def _run_swing_scan() -> None:
+    """Run the SEPARATE swing-book pipeline (sentinel/swing/). Independent of
+    the three core scans above; swing alerts have their own daily cap."""
+    try:
+        from sentinel.swing.pipeline import run_swing_scan
+    except ImportError:
+        return
+    with _session() as db:
+        try:
+            run_swing_scan(db, send_alerts=True)
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("swing scan failed")
+
+
+def job_swing_open() -> None:
+    """09:45 ET: swing setup scan shortly after the open. Swing alerts may fire."""
+    if _weekend_or_closed() or not is_market_open():
+        return
+    _run_swing_scan()
+
+
+def job_swing_midday() -> None:
+    """12:30 ET: midday swing setup refresh. Swing alerts may fire."""
+    if _weekend_or_closed() or not is_market_open():
+        return
+    _run_swing_scan()
+
+
 def job_watchdog() -> None:
     if _weekend_or_closed():
         return
@@ -177,9 +248,10 @@ def job_post_close() -> None:
 
 
 def job_nightly_evaluation() -> None:
-    """Resolve signals and update strategy stats (Phase 6). Deterministic;
-    still skipped on weekends per the no-weekend-runs rule (Friday's signals
-    resolve on the next trading night)."""
+    """Resolve signals, update strategy stats (Phase 6), and sweep expired
+    cache rows. Deterministic; still skipped on weekends per the
+    no-weekend-runs rule (Friday's signals resolve on the next trading
+    night)."""
     if datetime.now(ET).weekday() >= 5:
         return
     try:
@@ -193,6 +265,16 @@ def job_nightly_evaluation() -> None:
         except Exception:
             db.rollback()
             log.exception("nightly evaluation failed")
+    with _session() as db:
+        try:
+            from sentinel.data.cache import purge_expired
+
+            purged = purge_expired(db)
+            db.commit()
+            log.info("cache housekeeping", purged=purged)
+        except Exception:
+            db.rollback()
+            log.exception("cache purge failed")
 
 
 def _send_brief(kind: str) -> None:

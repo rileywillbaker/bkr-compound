@@ -36,11 +36,42 @@ def _positions_lines(db: Session) -> list[str]:
     return lines
 
 
+def _opportunity_lines(db: Session, relevant: set[str], limit: int = 8) -> list[str]:
+    """Why today's scan set is actually interesting — the deterministic
+    discovery events (pullback from 52-week high, unusual volume, insider
+    buying, etc.), not just a price list. This is the whole point of the
+    brief: "regime + prices" alone tells you nothing you couldn't get by
+    opening a stock app; the reasons a symbol was flagged are the value-add."""
+    from sentinel.data.discovery import DISCOVERY_KEY
+    from sentinel.db.settings_store import get_setting
+
+    stored = get_setting(db, DISCOVERY_KEY)
+    if not isinstance(stored, dict):
+        return []
+    best: dict[str, dict] = {}
+    for e in stored.get("events") or []:
+        symbol = e.get("symbol")
+        if symbol not in relevant:
+            continue
+        if symbol not in best or e.get("score", 0) > best[symbol].get("score", 0):
+            best[symbol] = e
+    ranked = sorted(best.items(), key=lambda kv: -kv[1].get("score", 0))[:limit]
+    return [f"  {symbol}: {event.get('detail', event.get('kind', ''))}" for symbol, event in ranked]
+
+
 def compose_pre_open(db: Session) -> str:
+    from sentinel.data.discovery import get_scan_symbols
+
     symbols = get_settings().watchlist_symbols
     context = build_market_context(db, symbols)
     regime = classify_regime(context.spy_bars, context.macro.get("VIXCLS"))
     lines = [f"Regime: {regime.regime} — {regime.detail}"]
+
+    scan_set = set(get_scan_symbols(db))
+    opportunities = _opportunity_lines(db, scan_set | set(symbols))
+    lines.append("Opportunities:" if opportunities else "Opportunities: none flagged today")
+    lines.extend(opportunities)
+
     watch = []
     for symbol, sym_ctx in context.symbols.items():
         if sym_ctx.daily_bars:

@@ -1,4 +1,4 @@
-"""Daily LLM cost cap ($0.50 from models.yaml) and automatic degraded mode."""
+"""Daily LLM caps (cost + call count from models.yaml) and degraded mode."""
 
 from datetime import UTC, datetime
 
@@ -17,8 +17,12 @@ def _usage(cost: float) -> ApiUsage:
     )
 
 
-def test_cost_budget_is_fifty_cents_from_yaml():
-    assert client.daily_cost_budget_usd() == pytest.approx(0.50)
+def test_cost_budget_comes_from_yaml():
+    assert client.daily_cost_budget_usd() == pytest.approx(0.25)
+
+
+def test_call_budget_comes_from_yaml():
+    assert client.daily_call_budget() == 25
 
 
 def test_under_budget_passes(db):
@@ -28,12 +32,31 @@ def test_under_budget_passes(db):
 
 
 def test_cost_budget_blocks_when_hit(db):
-    db.add(_usage(0.30))
-    db.add(_usage(0.25))
+    db.add(_usage(0.20))
+    db.add(_usage(0.10))
     db.flush()
-    assert client.cost_used_today(db) == pytest.approx(0.55)
+    assert client.cost_used_today(db) == pytest.approx(0.30)
     with pytest.raises(client.BudgetExceeded):
         client._check_budget(db)
+
+
+def test_call_count_backstop_blocks_when_pricing_is_unknown(db):
+    """A model LiteLLM can't price reports $0.00 forever — without a count
+    cap a runaway loop would never trip the dollar budget."""
+    for _ in range(client.daily_call_budget()):
+        db.add(_usage(0.0))
+    db.flush()
+    assert client.cost_used_today(db) == pytest.approx(0.0)
+    with pytest.raises(client.BudgetExceeded, match="call budget"):
+        client._check_budget(db)
+
+
+def test_budget_status_reports_degraded(db):
+    db.add(_usage(0.30))
+    db.flush()
+    status = client.budget_status(db)
+    assert status["degraded"] is True
+    assert status["cost_budget_usd"] == pytest.approx(0.25)
 
 
 def test_budget_exhaustion_degrades_to_deterministic(db, monkeypatch):

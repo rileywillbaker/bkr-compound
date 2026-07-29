@@ -78,15 +78,46 @@ def costs(days: int = 7, db: Session = Depends(get_db)) -> list[dict]:
     ]
 
 
+@router.get("/budget")
+def budget(db: Session = Depends(get_db)) -> dict:
+    """Today's AI spend against every cap, plus the mode driving it.
+
+    The point of this endpoint is that "near-zero cost" should be verifiable,
+    not asserted: `degraded` true means the system has already fallen back to
+    deterministic-only output and will stay there until midnight UTC.
+    """
+    from sentinel.data.cache import stats as cache_stats
+    from sentinel.modes import get_policy
+    from sentinel.providers.llm.client import budget_status
+
+    policy = get_policy(db)
+    return {
+        "operating_mode": policy.mode,
+        "operating_mode_label": policy.label,
+        "scan_depth": policy.scan_depth,
+        "max_llm_candidates_per_scan": policy.max_llm_candidates_per_scan,
+        "today": budget_status(db),
+        "cache": cache_stats(db),
+    }
+
+
 @router.post("/ingest")
 def trigger_ingest(db: Session = Depends(get_db)) -> dict:
-    """Manual full ingest (used right after onboarding)."""
+    """Manual full ingest (used right after onboarding).
+
+    Bypasses the freshness caches (`force=True`) because the operator asked
+    for a refresh explicitly — the scheduled jobs are the ones that must be
+    frugal.
+    """
+    from sentinel.data.discovery import get_scan_symbols
+
     return {
         "bars": ingest.ingest_bars(db),
         "quotes": ingest.ingest_quotes(db),
         "news": ingest.ingest_news(db),
-        "fundamentals": ingest.ingest_fundamentals(db),
-        "earnings": ingest.ingest_earnings_calendar(db),
+        "fundamentals": ingest.ingest_fundamentals(db, force=True),
+        "earnings": ingest.ingest_earnings_calendar(db, force=True),
         "macro": ingest.ingest_macro(db),
         "filings": ingest.ingest_filings(db),
+        "short_interest": ingest.ingest_short_interest(db, symbols=get_scan_symbols(db)),
     }

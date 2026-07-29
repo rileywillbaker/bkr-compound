@@ -5,9 +5,12 @@ from sqlalchemy.orm import Session
 
 from sentinel.providers.credentials import get_credential
 from sentinel.providers.filings.edgar import EdgarFilings
+from sentinel.providers.institutional.fintel import FintelInstitutional
 from sentinel.providers.macro.fred import FredMacro
 from sentinel.providers.market_data.alpaca import AlpacaMarketData
 from sentinel.providers.research.finnhub import FinnhubResearch
+from sentinel.providers.research.yahoo import YahooOverview
+from sentinel.providers.screener.finviz import FinvizScreener
 
 
 class CredentialsMissing(Exception):
@@ -45,3 +48,22 @@ def build_filings(db: Session | None = None) -> EdgarFilings:
     if not ua or "@" not in ua:
         raise CredentialsMissing("edgar", ["user_agent (must include contact email)"])
     return EdgarFilings(ua)
+
+
+def build_overview(db: Session | None = None) -> YahooOverview:
+    """Yahoo needs no credentials — always available."""
+    return YahooOverview()
+
+
+def build_screener(db: Session | None = None) -> FinvizScreener:
+    token = get_credential(db, "finviz", "auth_token")
+    if not token:
+        raise CredentialsMissing("finviz", ["auth_token"])
+    return FinvizScreener(token)
+
+
+def build_institutional(db: Session | None = None) -> FintelInstitutional:
+    key = get_credential(db, "fintel", "api_key")
+    if not key:
+        raise CredentialsMissing("fintel", ["api_key"])
+    return FintelInstitutional(key)

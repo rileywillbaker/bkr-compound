@@ -1,4 +1,4 @@
-"""Pipeline entry point. The scheduler's three daily scans call run_scan; the
+"""Pipeline entry point. The scheduler's daily scans call run_scan; the
 /api/pipeline router and chat call it for on-demand runs. Each run persists
 its signals, routes qualifying ones to the alert channel, and is recorded to
 the system_events audit trail; the last result is kept in memory for the API.
@@ -8,7 +8,13 @@ watchlist + held positions — never the watchlist alone; any ticker in the
 expanded universe (or passed explicitly) goes through the identical graph,
 ending in the risk gate. `alert_actions` gates which signal actions may
 alert: the 09:30 scan passes {"BUY"}, the 15:30 scan passes {"SELL"}, and
-on-demand runs default to none (signals are still persisted and visible)."""
+on-demand runs default to none (signals are still persisted and visible).
+
+Cost: the operating mode (sentinel/modes.py) decides whether this run may
+spend anything at all and how deeply. `use_llm=False` forces a free run in
+any mode; `on_demand=True` marks a user-initiated run, which is the only kind
+that gets full multi-agent depth outside Research mode.
+"""
 
 import contextlib
 from collections.abc import Collection
@@ -21,6 +27,7 @@ from sentinel.alerts.router import route_signal_alerts, send_ops_alert
 from sentinel.data.bus import publish
 from sentinel.data.discovery import get_scan_symbols
 from sentinel.db.models import SystemEvent
+from sentinel.modes import get_policy
 from sentinel.pipeline.graph import build_graph
 from sentinel.pipeline.persist import save_signals
 from sentinel.pipeline.state import PipelineState
@@ -39,10 +46,19 @@ def run_scan(
     symbols: list[str] | None = None,
     use_llm: bool = True,
     alert_actions: Collection[str] = (),
+    on_demand: bool = False,
 ) -> PipelineState:
     global _last_run
     symbols = symbols or get_scan_symbols(db)
-    initial = PipelineState(symbols=symbols, use_llm=use_llm)
+    policy = get_policy(db)
+    depth = policy.depth_for(on_demand) if use_llm else "none"
+    initial = PipelineState(
+        symbols=symbols,
+        use_llm=use_llm,
+        mode=policy.mode,
+        depth=depth,
+        on_demand=on_demand,
+    )
     graph = build_graph(db)
     try:
         result = PipelineState.model_validate(graph.invoke(initial))
@@ -87,13 +103,18 @@ def run_scan(
     db.add(
         SystemEvent(
             kind="pipeline.run",
-            message=f"scan of {len(symbols)} symbols: "
+            message=f"scan of {len(symbols)} symbols in {result.mode} mode "
+            f"({result.depth} depth, {result.llm_calls} LLM call(s)): "
             f"{len(result.signals)} signals, {len(actionable)} actionable, "
             f"{len(rejected)} vetoed, {alerts_sent} alerted",
             payload={
                 "run_id": str(result.run_id),
                 "alert_actions": sorted(alert_actions),
                 "regime": result.regime.regime if result.regime else None,
+                "mode": result.mode,
+                "depth": result.depth,
+                "llm_calls": result.llm_calls,
+                "funnel": result.funnel,
                 "duration_seconds": (datetime.now(UTC) - result.started_at).total_seconds(),
                 "signals": [str(s.id) for s in result.signals],
             },

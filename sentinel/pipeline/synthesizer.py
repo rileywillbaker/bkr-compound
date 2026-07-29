@@ -1,28 +1,29 @@
 """Signal Synthesizer (spec §4.6).
 
 Everything numeric is computed here in code:
-  confidence = weighted analyst agreement × regime/strategy fit × strategy
-               hit-rate (neutral prior until the evaluation store matures)
+  conviction  = weighted analyst agreement × regime/strategy fit
+  confidence  = conviction × strategy hit-rate (neutral prior until the
+                evaluation store matures) × the review's stance multiplier
   risk_score, expected return, and all price/share fields come from sizing
   and market data.
 
-The LLM contributes exactly one thing: the plain-English explanation
-(≤ 500 chars). When it is unavailable a deterministic template is used and
-the signal is flagged deterministic_only.
+The LLM contributes exactly two things, both via the single combined review
+call (agents/review.py): the plain-English explanation, and a categorical
+stance whose only permitted effect is to HOLD or LOWER conviction — 'reject'
+downgrades the action to NO_TRADE. It can never create a trade, raise
+confidence, or alter a level. When no review is attached (Free mode, no
+trigger, budget exhausted, outage) a deterministic template is used and the
+signal is flagged deterministic_only.
 """
 
-import json
-from decimal import Decimal
-
 import structlog
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from sentinel.agents.regime import RegimeAssessment
+from sentinel.agents.review import CandidateReview
 from sentinel.agents.verdicts import AnalystVerdict, EvidenceItem
 from sentinel.evaluation.priors import strategy_hit_rate
 from sentinel.pipeline.state import CandidateState, Signal
-from sentinel.providers.llm.client import LLMError, complete_json
 from sentinel.strategies.base import analyst_aggregate
 
 log = structlog.get_logger()
@@ -30,13 +31,24 @@ log = structlog.get_logger()
 MAX_EVIDENCE = 12
 
 
+def compute_conviction(verdicts: list[AnalystVerdict], fit_score: float) -> float:
+    """Deterministic agreement × strategy fit, 0..1.
+
+    Deliberately excludes the hit-rate prior: conviction measures "how good
+    does this setup look right now", which is the right question when deciding
+    whether an LLM call is worth paying for. The hit-rate belongs in the
+    calibrated confidence below.
+    """
+    agreement = (analyst_aggregate(verdicts) + 100) / 200
+    fit = max(0.0, min(100.0, fit_score)) / 100
+    return round(agreement * fit, 4)
+
+
 def compute_confidence(
     verdicts: list[AnalystVerdict], fit_score: float, hit_rate: float
 ) -> float:
     """Calibrated aggregate per spec: agreement × fit × hit-rate, all 0..1."""
-    agreement = (analyst_aggregate(verdicts) + 100) / 200
-    fit = max(0.0, min(100.0, fit_score)) / 100
-    return round(agreement * fit * hit_rate, 4)
+    return round(compute_conviction(verdicts, fit_score) * hit_rate, 4)
 
 
 def compute_risk_score(atr_pct: float | None, regime: str) -> int:
@@ -58,20 +70,12 @@ def merge_evidence(candidate: CandidateState) -> list[EvidenceItem]:
         )
     for verdict in candidate.verdicts:
         merged.extend(verdict.evidence)
+    if candidate.review is not None:
+        merged.extend(
+            EvidenceItem(source="review", datapoint=risk)
+            for risk in candidate.review.key_risks
+        )
     return merged[:MAX_EVIDENCE]
-
-
-class _Explanation(BaseModel):
-    text: str = Field(max_length=500)
-
-
-_EXPLAIN_SYSTEM = (
-    "You write the plain-English rationale for a stock signal produced by a "
-    "deterministic pipeline. You are given the chosen strategy, regime, "
-    "analyst verdicts, and the exact computed trade levels. Explain WHY in "
-    "under 500 characters, citing concrete data points. Do not invent or "
-    "alter any number. This is information, not financial advice."
-)
 
 
 def _fallback_explanation(candidate: CandidateState, regime: str, action: str) -> str:
@@ -87,7 +91,7 @@ def synthesize_signal(
     db: Session,
     candidate: CandidateState,
     regime: RegimeAssessment,
-    use_llm: bool = True,
+    review: CandidateReview | None = None,
 ) -> Signal:
     """Build the Signal for a candidate that has a strategy selection.
 
@@ -103,8 +107,16 @@ def synthesize_signal(
         # no valid position exists at current risk budget -> stand aside
         action = "NO_TRADE"
 
+    review = review if review is not None else candidate.review
+    # The stance can only stand the trade down, never stand it up.
+    if review is not None and review.vetoes_trade and action in ("BUY", "SELL"):
+        log.info("review stance downgraded action", symbol=candidate.symbol, was=action)
+        action = "NO_TRADE"
+
     hit_rate = strategy_hit_rate(db, fit.strategy, regime=regime.regime)
     confidence = compute_confidence(candidate.verdicts, fit.score, hit_rate)
+    if review is not None:
+        confidence = round(confidence * review.confidence_multiplier, 4)
     atr_pct = snap.atr_pct if snap else None
     close = snap.close if snap else 0.0
 
@@ -112,6 +124,8 @@ def synthesize_signal(
     max_entry = stop = target = None
     expected_return = None
     if action == "BUY" and sizing is not None:
+        from decimal import Decimal
+
         shares = sizing.shares
         max_entry = Decimal(str(sizing.max_entry_price))
         stop = Decimal(str(sizing.stop_loss))
@@ -119,31 +133,12 @@ def synthesize_signal(
         if close > 0:
             expected_return = round((sizing.take_profit - close) / close * 100, 4)
 
-    deterministic_only = not use_llm
-    explanation = _fallback_explanation(candidate, regime.regime, action)
-    if use_llm:
-        facts = {
-            "symbol": candidate.symbol,
-            "action": action,
-            "strategy": fit.model_dump(),
-            "regime": regime.model_dump(),
-            "verdicts": [v.model_dump() for v in candidate.verdicts],
-            "levels": sizing.model_dump() if sizing else None,
-            "confidence": confidence,
-        }
-        try:
-            result = complete_json(
-                db,
-                role="reasoning",
-                system=_EXPLAIN_SYSTEM,
-                user=json.dumps(facts, default=str),
-                schema=_Explanation,
-                endpoint="synthesizer.explanation",
-            )
-            explanation = result.text[:500]
-        except LLMError as exc:
-            deterministic_only = True
-            log.warning("synthesizer explanation fallback", error=str(exc))
+    has_narrative = review is not None and bool(review.explanation)
+    explanation = (
+        review.explanation[:500]
+        if has_narrative and review is not None
+        else _fallback_explanation(candidate, regime.regime, action)
+    )
 
     return Signal(
         ticker=candidate.symbol,
@@ -160,6 +155,5 @@ def synthesize_signal(
         regime=regime.regime,
         evidence=merge_evidence(candidate),
         explanation=explanation,
-        deterministic_only=deterministic_only
-        or all(v.deterministic_only for v in candidate.verdicts),
+        deterministic_only=not has_narrative,
     )

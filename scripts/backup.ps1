@@ -15,8 +15,14 @@ $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $file = Join-Path $OutDir "bquant-$stamp.dump"
 
 # Custom format (-Fc): compressed, restorable table-by-table with pg_restore.
-docker compose exec -T db pg_dump -U bquant -d bquant -Fc | Set-Content -Path $file -AsByteStream
-if ($LASTEXITCODE -ne 0 -or (Get-Item $file).Length -eq 0) {
+#
+# The redirect goes through cmd.exe on purpose. Piping pg_dump's binary output
+# into Set-Content corrupts it (PowerShell decodes the stream as text), and the
+# byte-faithful alternatives differ by version: -AsByteStream is PowerShell 6+
+# and throws on Windows PowerShell 5.1, while -Encoding Byte is 5.1-only and
+# throws on 6+. cmd's `>` is a raw byte redirect on every version.
+cmd /c "docker compose exec -T db pg_dump -U bquant -d bquant -Fc > `"$file`""
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $file) -or (Get-Item $file).Length -eq 0) {
     Remove-Item $file -ErrorAction SilentlyContinue
     throw "pg_dump failed"
 }

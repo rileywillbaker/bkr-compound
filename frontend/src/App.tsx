@@ -15,6 +15,7 @@ import Portfolio from "./views/Portfolio";
 import Settings from "./views/Settings";
 import Signals from "./views/Signals";
 import System from "./views/System";
+import Trading from "./views/Trading";
 
 type Gate = "loading" | "login" | "onboarding" | "ready";
 
@@ -61,6 +62,7 @@ export default function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/chat" element={<Chat />} />
             <Route path="/signals" element={<Signals />} />
+            <Route path="/trading" element={<Trading />} />
             <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/journal" element={<Journal />} />
             <Route path="/analytics" element={<Analytics />} />

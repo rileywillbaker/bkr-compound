@@ -54,10 +54,22 @@ export interface SignalSummary {
   time_horizon: string;
   strategy: string;
   regime: string;
+  book?: string; // "core" (long-term) or "swing"
   explanation: string;
   deterministic_only: boolean;
   alert_sent: boolean;
   user_decision: string | null;
+}
+
+export interface SwingFeed {
+  regime: string | null;
+  generated_at: string | null;
+  universe_size: number | null;
+  scanned: number | null;
+  screened_count: number | null;
+  alerts_sent: number | null;
+  signals: SignalSummary[];
+  disclaimer: string;
 }
 
 export interface RiskRule {
@@ -99,9 +111,70 @@ export interface PortfolioValuation {
 
 export interface AppSettings {
   watchlist: string[];
+  universe_size: number;
+  universe_files: string[];
   starting_equity: number;
   alert_quiet_hours: { start: string; end: string } | null;
   onboarding_complete: boolean;
+  operating_mode: OperatingMode;
+  operating_mode_label: string;
+  full_universe_deep_ingest: boolean;
+  focus_set_size: number;
+}
+
+export type OperatingMode = "free" | "smart" | "research";
+
+export interface ModeOption {
+  mode: OperatingMode;
+  label: string;
+  description: string;
+  scan_depth: "none" | "review" | "full";
+  on_demand_depth: "none" | "review" | "full";
+  max_llm_candidates_per_scan: number;
+}
+
+// Deterministic position management — produced with zero AI cost, in every mode.
+export type PositionAction =
+  | "EXIT"
+  | "REDUCE"
+  | "TAKE_PARTIAL_PROFITS"
+  | "TIGHTEN_STOP"
+  | "INCREASE"
+  | "HOLD"
+  | "NO_ACTION";
+
+export interface PositionReview {
+  symbol: string;
+  action: PositionAction;
+  shares: number;
+  shares_delta: number;
+  mark: number;
+  cost_basis: number;
+  market_value: number;
+  weight_pct: number;
+  unrealized_pct: number;
+  r_multiple: number | null;
+  suggested_stop: number | null;
+  sector: string;
+  reasons: string[];
+  urgency: number;
+}
+
+export interface BudgetStatus {
+  operating_mode: OperatingMode;
+  operating_mode_label: string;
+  scan_depth: string;
+  max_llm_candidates_per_scan: number;
+  today: {
+    cost_usd: number;
+    cost_budget_usd: number;
+    calls: number;
+    call_budget: number;
+    tokens: number;
+    token_budget: number;
+    degraded: boolean;
+  };
+  cache: { entries: number; live: number; expired: number; by_kind: Record<string, number> };
 }
 
 export interface ProviderOverview {

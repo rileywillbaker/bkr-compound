@@ -69,6 +69,30 @@ def build_scheduler() -> BackgroundScheduler:
         max_instances=1,
         misfire_grace_time=1800,  # job no-ops itself once the market closes
     )
+    # Swing book (sentinel/swing/) — two scans of its own, separate from the
+    # three core scans above. Guard themselves on market hours internally.
+    sched.add_job(
+        jobs.job_swing_open,
+        "cron",
+        day_of_week="mon-fri",
+        hour=9,
+        minute=45,
+        id="swing_open",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3 * 3600,
+    )
+    sched.add_job(
+        jobs.job_swing_midday,
+        "cron",
+        day_of_week="mon-fri",
+        hour=12,
+        minute=30,
+        id="swing_midday",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=1800,
+    )
     sched.add_job(
         jobs.job_watchdog,
         "cron",

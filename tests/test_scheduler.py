@@ -1,6 +1,7 @@
-"""Scheduler contract: exactly three scans per trading day (08:30 / 09:30 /
-15:30 ET), no rolling intraday scan, everything mon-fri, and a hard weekend
-guard inside the jobs themselves."""
+"""Scheduler contract: exactly three CORE scans per trading day (08:30 / 09:30
+/ 15:30 ET), no rolling intraday core scan, everything mon-fri, and a hard
+weekend guard inside the jobs themselves. The swing book adds its own two
+scans (09:45 / 12:30 ET), also mon-fri and weekend-guarded."""
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -23,9 +24,11 @@ def sched():
     return build_scheduler()
 
 
-def test_exactly_three_scans_and_no_intraday(sched):
+def test_exactly_three_core_scans_and_no_intraday(sched):
     ids = {job.id for job in sched.get_jobs()}
-    assert "intraday_scan" not in ids  # the 15/30-min rolling scan is gone
+    assert "intraday_scan" not in ids  # the 15/30-min rolling core scan is gone
+    # The three core scans (unchanged) + support jobs. The swing book adds its
+    # own two scans separately (asserted below) without touching these.
     assert ids == {
         "premarket_discovery",
         "market_open_scan",
@@ -33,7 +36,15 @@ def test_exactly_three_scans_and_no_intraday(sched):
         "watchdog",
         "post_close",
         "nightly_eval",
+        "swing_open",
+        "swing_midday",
     }
+
+
+def test_swing_scans_are_separate(sched):
+    times = {j.id: _fields(j) for j in sched.get_jobs()}
+    assert (times["swing_open"]["hour"], times["swing_open"]["minute"]) == ("9", "45")
+    assert (times["swing_midday"]["hour"], times["swing_midday"]["minute"]) == ("12", "30")
 
 
 def test_scan_times_are_0830_0930_1530_et(sched):
@@ -90,6 +101,8 @@ def test_weekend_scan_jobs_do_nothing(monkeypatch):
     jobs.job_post_close()
     jobs.job_watchdog()
     jobs.job_nightly_evaluation()
+    jobs.job_swing_open()
+    jobs.job_swing_midday()
 
 
 def test_open_scan_alerts_buy_only_close_scan_sell_only(monkeypatch):

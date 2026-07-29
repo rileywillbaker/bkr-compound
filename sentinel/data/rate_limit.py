@@ -18,11 +18,25 @@ from sentinel.config import get_settings
 # limit (observed as upstream 429s during full-universe sweeps). 1/s gives
 # the same worst-case throughput (60/min) with no bursts.
 BUDGETS: dict[str, tuple[int, int]] = {
-    "alpaca": (190, 60),
+    # Same fix as Finnhub below: a fixed 60s window lets a ~190-call burst
+    # out right after each reset, which trips Alpaca's own short-term burst
+    # limit (observed as mid-sweep 429s during full-universe ingests, e.g.
+    # MSFT/MRK/MO silently missing a day's bars). 3/1s gives the same
+    # worst-case throughput (180/min) with no bursts.
+    "alpaca": (3, 1),
     "finnhub": (1, 1),
     "fred": (100, 60),
     "edgar": (8, 1),
     "telegram": (25, 60),
+    # One export call covers the whole market, so this is barely used —
+    # conservative anyway since Finviz doesn't publish a documented limit.
+    "finviz": (20, 60),
+    # Fintel's plan-tier limits aren't published; paced like Finnhub so a
+    # scan-set-sized sweep (~30-50 symbols) finishes in well under a minute
+    # without risking a burst limit on a personal-tier key.
+    "fintel": (1, 1),
+    # Unofficial endpoint; paced conservatively to reduce 429/999 responses.
+    "yahoo": (1, 2),
 }
 
 

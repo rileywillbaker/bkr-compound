@@ -51,6 +51,58 @@ def test_equity_and_onboarding(client):
     assert client.get("/api/settings").json()["onboarding_complete"] is True
 
 
+def test_operating_mode_roundtrip(client):
+    modes = client.get("/api/settings/modes").json()
+    assert modes["current"] == "smart"
+    assert {m["mode"] for m in modes["modes"]} == {"free", "smart", "research"}
+    assert all(m["label"] and m["description"] for m in modes["modes"])
+
+    assert client.put("/api/settings/mode", json={"mode": "free"}).status_code == 200
+    assert client.get("/api/settings").json()["operating_mode"] == "free"
+    assert client.put("/api/settings/mode", json={"mode": "turbo"}).status_code == 422
+
+
+def test_research_endpoint_is_blocked_in_free_mode(client):
+    """Free mode's promise is $0. It says so instead of quietly charging."""
+    client.put("/api/settings/mode", json={"mode": "free"})
+    resp = client.post("/api/pipeline/research", json={"symbol": "NVDA"})
+    assert resp.status_code == 409
+    assert "Free mode" in resp.json()["detail"]
+
+
+def test_ingest_scope_roundtrip(client):
+    resp = client.put(
+        "/api/settings/ingest-scope",
+        json={"full_universe_deep_ingest": True, "focus_set_size": 120},
+    )
+    assert resp.status_code == 200
+    settings = client.get("/api/settings").json()
+    assert settings["full_universe_deep_ingest"] is True
+    assert settings["focus_set_size"] == 120
+    assert client.put("/api/settings/ingest-scope", json={"focus_set_size": 1}).status_code == 422
+
+
+def test_budget_endpoint_reports_caps_and_mode(client):
+    body = client.get("/api/system/budget").json()
+    assert body["operating_mode"] == "smart"
+    assert body["today"]["cost_usd"] == 0.0
+    assert body["today"]["cost_budget_usd"] > 0
+    assert body["today"]["degraded"] is False
+    assert "cache" in body
+
+
+def test_portfolio_review_endpoint(client, db):
+    from sentinel.db.models import Position
+
+    assert client.get("/api/portfolio/review").json()["reviews"] == []
+
+    db.add(Position(symbol="NVDA", shares=10, cost_basis=100))
+    db.flush()
+    body = client.get("/api/portfolio/review").json()
+    assert [r["symbol"] for r in body["reviews"]] == ["NVDA"]
+    assert body["disclaimer"]
+
+
 def test_quiet_hours_validation(client):
     ok = client.put("/api/settings/quiet-hours", json={"start": "22:00", "end": "07:00"})
     assert ok.status_code == 200

@@ -199,6 +199,13 @@ class SignalRow(Base):
         DateTime(timezone=True), default=UTCNow, index=True
     )
     run_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    # Which "book" produced this signal: "core" = the long-term/position
+    # pipeline (default; all pre-existing rows), "swing" = the swing-trading
+    # pipeline (sentinel/swing/). Lets the two feeds stay separate without any
+    # change to the core pipeline's behavior.
+    book: Mapped[str] = mapped_column(
+        String(8), default="core", server_default="core", index=True
+    )
     ticker: Mapped[str] = mapped_column(String(12), index=True)
     action: Mapped[str] = mapped_column(String(8), index=True)
     shares: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -367,3 +374,43 @@ class InsiderTransactionRow(Base):
             "symbol", "name", "transaction_date", "share_change", name="uq_insider_txn"
         ),
     )
+
+
+# --------------------------------------------------------------------------
+# Market intelligence — short interest / dark pool (Fintel)
+# --------------------------------------------------------------------------
+class CacheEntry(Base):
+    """Generic TTL cache (see sentinel/data/cache.py).
+
+    Holds two things: freshness markers that let ingestion skip provider calls
+    for data that hasn't changed, and fingerprinted LLM reviews so an unchanged
+    situation is never re-analyzed at cost. Nothing here is authoritative —
+    every row is safe to delete; the system just does more work afterwards.
+    """
+
+    __tablename__ = "cache_entries"
+    key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(48), default="", index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=UTCNow, index=True
+    )
+
+
+class ShortInterestRow(Base):
+    """Latest short-interest snapshot per symbol; overwritten on each ingest
+    (unlike insider_transactions, this is a point-in-time snapshot, not a
+    log of discrete events, so there is nothing to accumulate)."""
+
+    __tablename__ = "short_interest"
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True)
+    as_of: Mapped[date] = mapped_column(Date)
+    short_percent_float: Mapped[float | None] = mapped_column(Float, nullable=True)
+    short_percent_shares_outstanding: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    days_to_cover: Mapped[float | None] = mapped_column(Float, nullable=True)
+    short_interest_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dark_pool_short_volume_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)

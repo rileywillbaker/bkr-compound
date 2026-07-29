@@ -2,23 +2,51 @@
 # resolves its model through a role defined here. Swap providers by editing
 # this file only.
 #
-# Roles (cost policy, spec update 2026-07):
-#   reasoning : Sonnet — SYNTHESIS ONLY (final signal explanation) plus the
-#               interactive chat assistant. Nothing per-candidate runs here.
-#   triage    : Haiku — everything cheap and per-candidate: news screening,
-#               analyst interpretation (technicals/fundamentals/macro), and
-#               the strategy tie-break vote.
+# Roles (cost policy, 2026-07 optimization pass):
+#   review    : the ONE call the automatic pipeline is willing to pay for.
+#               Runs last, on finalists that already cleared every
+#               deterministic filter AND the risk engine (typically 1–3 per
+#               trading day). Because it is so rare, it gets the stronger
+#               model: one good judgement beats five cheap ones. See
+#               sentinel/agents/review.py.
+#   reasoning : the interactive chat assistant.
+#   triage    : the per-analyst fan-out, used ONLY at "full" depth — i.e.
+#               user-initiated research, or Research mode. Never on a
+#               scheduled Smart-mode scan.
+#
+# What changed and why: the pipeline used to spend ~7 calls per screened
+# candidate (five analysts + a strategy tie-break + a synthesis narrative) on
+# every scan. It now spends ONE cached call per finalist. The analyst fact
+# tables, the strategy fit, the sizing and the risk verdict are all computed
+# in Python and handed to that single call.
 #
 # Budget: policy.daily_cost_budget_usd is a HARD daily cap enforced in
-# sentinel/providers/llm/client.py. When it (or the token backstop) is hit,
-# BudgetExceeded is raised and every call site automatically degrades to its
-# deterministic fallback — signals are still produced, flagged
-# deterministic_only. There is no override.
+# sentinel/providers/llm/client.py, with a call-count and token backstop.
+# When any of them is hit, BudgetExceeded is raised and every call site
+# automatically degrades to its deterministic fallback — signals are still
+# produced, flagged deterministic_only. There is no override.
+#
+# For a literal $0 bill, set the operating mode to "free" in Settings: no call
+# is attempted at all, and everything except the AI narrative still runs.
 #
 # To use a local Ollama fallback, uncomment the ollama entries and set
 # `active` accordingly. No code changes required.
 
 roles:
+  review:
+    active: anthropic-review
+    candidates:
+      anthropic-review:
+        model: anthropic/claude-sonnet-4-6
+        max_tokens: 1024  # stance + <500 char explanation + 3 risks
+      # anthropic-review-cheap:
+      #   model: anthropic/claude-haiku-4-5
+      #   max_tokens: 1024
+      # ollama-review:
+      #   model: ollama/llama3.1:70b
+      #   api_base: http://localhost:11434
+      #   max_tokens: 1024
+
   reasoning:
     active: anthropic-reasoning
     candidates:
@@ -48,4 +76,9 @@ policy:
   retry_backoff_base_seconds: 2
   # Hard daily spend cap (USD, UTC day) across all roles. Hitting it flips
   # the pipeline into deterministic-only degraded mode until midnight UTC.
-  daily_cost_budget_usd: 0.50
+  # Smart mode's expected steady-state spend is well under $0.10/day, so this
+  # is a backstop against a runaway loop, not an operating target.
+  daily_cost_budget_usd: 0.25
+  # Second backstop: a hard call count for days where per-call cost can't be
+  # computed (unknown model pricing, proxy in front of the API).
+  max_llm_calls_per_day: 25

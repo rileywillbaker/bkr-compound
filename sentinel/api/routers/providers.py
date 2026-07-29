@@ -17,9 +17,12 @@ from sentinel.providers.credentials import (
 from sentinel.providers.registry import (
     CredentialsMissing,
     build_filings,
+    build_institutional,
     build_macro,
     build_market_data,
+    build_overview,
     build_research,
+    build_screener,
 )
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
@@ -62,6 +65,9 @@ def test_provider(provider: str, db: Session = Depends(get_db)) -> ProviderCheck
         "finnhub": build_research,
         "fred": build_macro,
         "edgar": build_filings,
+        "finviz": build_screener,
+        "fintel": build_institutional,
+        "yahoo": build_overview,
     }
     if provider == "telegram":
         try:

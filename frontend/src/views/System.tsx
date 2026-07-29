@@ -2,7 +2,7 @@
 // meter (LLM tokens + API calls), event log.
 
 import { useEffect, useState } from "react";
-import { api, ProviderCheck } from "../lib/api";
+import { api, BudgetStatus, ProviderCheck } from "../lib/api";
 import { PROVIDERS } from "../lib/providers";
 import { Button, Card, ErrorNote, Pill, Spinner, fmtWhen } from "../components/ui";
 
@@ -32,6 +32,7 @@ interface Event {
 export default function System() {
   const [status, setStatus] = useState<Status | null>(null);
   const [costs, setCosts] = useState<CostRow[]>([]);
+  const [budget, setBudget] = useState<BudgetStatus | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
   const [checks, setChecks] = useState<Record<string, ProviderCheck | "testing">>({});
   const [error, setError] = useState("");
@@ -39,6 +40,7 @@ export default function System() {
   useEffect(() => {
     api.get<Status>("/api/system/status").then(setStatus).catch((e) => setError(String(e.message ?? e)));
     api.get<CostRow[]>("/api/system/costs?days=7").then(setCosts).catch(() => setCosts([]));
+    api.get<BudgetStatus>("/api/system/budget").then(setBudget).catch(() => setBudget(null));
     api.get<Event[]>("/api/system/events?limit=50").then(setEvents).catch(() => setEvents([]));
   }, []);
 
@@ -79,6 +81,35 @@ export default function System() {
           <p className="mt-1 text-xl font-semibold">{totalTokens.toLocaleString()}</p>
         </Card>
       </div>
+
+      {budget && (
+        <Card title="AI budget today">
+          <p className="mb-3 text-xs text-slate-500">
+            Mode: <span className="text-slate-300">{budget.operating_mode_label}</span> — scheduled
+            scans use {budget.scan_depth === "none" ? "no AI at all" : `${budget.scan_depth} depth, at most ${budget.max_llm_candidates_per_scan} candidates per scan`}.
+            Hitting any cap flips the system to deterministic-only output until midnight UTC; no
+            recommendation is ever skipped for lack of budget.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              ["Spend", `$${budget.today.cost_usd.toFixed(4)} / $${budget.today.cost_budget_usd.toFixed(2)}`],
+              ["Calls", `${budget.today.calls}${budget.today.call_budget ? ` / ${budget.today.call_budget}` : ""}`],
+              ["Tokens", budget.today.tokens.toLocaleString()],
+              ["Cached answers", `${budget.cache.live.toLocaleString()} live`],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <span className="text-xs uppercase tracking-wider text-slate-500">{label}</span>
+                <p className="mt-1 text-lg font-semibold">{value}</p>
+              </div>
+            ))}
+          </div>
+          {budget.today.degraded && (
+            <p className="mt-3 text-sm text-amber-400">
+              Daily cap reached — running deterministic-only until midnight UTC.
+            </p>
+          )}
+        </Card>
+      )}
 
       <Card title="Provider health">
         <ul className="divide-y divide-slate-800">

@@ -24,7 +24,12 @@ log = structlog.get_logger()
 MAX_TOOL_CALLS = 4
 
 ToolName = Literal[
-    "latest_signals", "portfolio", "market_context", "performance", "analyze_ticker"
+    "latest_signals",
+    "portfolio",
+    "portfolio_review",
+    "market_context",
+    "performance",
+    "analyze_ticker",
 ]
 
 _SYSTEM = (
@@ -40,9 +45,11 @@ _SYSTEM = (
     "names). When uncertain the answer is NO TRADE. Keep replies under 250 "
     "words.\n\n"
     "Tools: latest_signals (recent signals), portfolio (positions/valuation), "
-    "market_context (regime, highlighted watchlist, discovery candidates), "
-    "performance (evaluation stats), analyze_ticker (tool_arg=TICKER; runs "
-    "the full pipeline for any ticker)."
+    "portfolio_review (per-position hold/trim/tighten/add/exit verdicts from "
+    "the deterministic portfolio manager — use this for 'review my "
+    "portfolio'), market_context (regime, highlighted watchlist, discovery "
+    "candidates), performance (evaluation stats), analyze_ticker "
+    "(tool_arg=TICKER; runs the full pipeline for any ticker)."
 )
 
 
@@ -103,6 +110,29 @@ def _tool_portfolio(db: Session, _arg: str | None) -> dict:
     }
 
 
+def _tool_portfolio_review(db: Session, _arg: str | None) -> dict:
+    """Deterministic per-position verdicts. Costs nothing to produce."""
+    from sentinel.portfolio.manager import review_positions
+
+    return {
+        "reviews": [
+            {
+                "symbol": r.symbol,
+                "action": r.action,
+                "shares": r.shares,
+                "shares_delta": r.shares_delta,
+                "mark": r.mark,
+                "unrealized_pct": r.unrealized_pct,
+                "r_multiple": r.r_multiple,
+                "suggested_stop": r.suggested_stop,
+                "weight_pct": r.weight_pct,
+                "reasons": r.reasons,
+            }
+            for r in review_positions(db)
+        ]
+    }
+
+
 def _tool_market_context(db: Session, _arg: str | None) -> dict:
     from sentinel.data.discovery import get_candidates
     from sentinel.pipeline.runner import last_run
@@ -138,9 +168,11 @@ def _tool_analyze_ticker(db: Session, arg: str | None) -> dict:
         return {"error": "analyze_ticker requires a ticker symbol in tool_arg"}
     ticker = arg.strip().upper()
     # any ticker is analyzable — backfill data on demand if it was never
-    # ingested (e.g. outside the static universe); chat runs never alert
+    # ingested (e.g. outside the static universe); chat runs never alert.
+    # on_demand marks this as user-initiated, which is what earns the full
+    # multi-agent depth outside Research mode (and stays free in Free mode).
     ensure_symbol_data(db, ticker)
-    state = run_scan(db, symbols=[ticker])
+    state = run_scan(db, symbols=[ticker], on_demand=True)
     out = []
     for signal in state.signals:
         row = db.get(SignalRow, str(signal.id))
@@ -164,6 +196,7 @@ def _tool_analyze_ticker(db: Session, arg: str | None) -> dict:
 _TOOLS = {
     "latest_signals": _tool_latest_signals,
     "portfolio": _tool_portfolio,
+    "portfolio_review": _tool_portfolio_review,
     "market_context": _tool_market_context,
     "performance": _tool_performance,
     "analyze_ticker": _tool_analyze_ticker,

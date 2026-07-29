@@ -1,0 +1,60 @@
+# High-liquidity U.S.-listed large caps that are in neither the S&P 500 nor
+# the Nasdaq-100 — mostly foreign issuers (ADRs) and large post-2020 listings.
+#
+# Inclusion bar for this file, matching the system's quality-over-quantity
+# rule: U.S. primary listing (NYSE/Nasdaq), large cap, and dollar volume deep
+# enough that a retail order is never the reason a fill is bad. Deliberately
+# NO penny stocks, NO OTC tickers, NO micro caps, and nothing whose data
+# coverage is thin — those fail the screener anyway and only cost scan time.
+#
+# Unioned with every other config/universe_*.csv. Editable without code
+# changes; refresh occasionally as listings and index membership move.
+symbol
+AFRM
+BABA
+BIDU
+BN
+CNI
+CP
+CVNA
+DKNG
+DOCU
+ELF
+ENB
+FERG
+FLUT
+HDB
+HOOD
+IBN
+INFY
+JD
+LI
+LYFT
+NET
+NIO
+NU
+NVO
+OKTA
+ONON
+PINS
+RBLX
+RDDT
+RIVN
+SE
+SHOP
+SNAP
+SNOW
+SOFI
+SPOT
+STLA
+TCOM
+TD
+TM
+TOST
+TRI
+TSM
+U
+UL
+WCN
+XPEV
+ZM

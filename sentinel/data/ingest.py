@@ -1,12 +1,18 @@
 """Ingestion jobs: pull from providers, upsert into TimescaleDB, log to
 system_events. Each job is independent and safe to re-run (idempotent upserts).
 
-Jobs default to the FULL static universe (S&P 500 + watchlist + positions,
-see sentinel.data.universe) so discovery can monitor every name; pass
-`symbols` to restrict a run (e.g. fundamentals/quotes for just the day's
-scan set, or an on-demand backfill for one ticker). All provider calls go
-through the shared rate limiter, so universe-wide runs are slow-but-safe on
-free tiers rather than bursty.
+Jobs default to the FULL static universe (S&P 500 + Nasdaq-100 + liquid large
+caps + watchlist + positions, see sentinel.data.universe) so discovery can
+monitor every name; pass `symbols` to restrict a run (e.g. the per-symbol
+calls for just the day's focus set, or an on-demand backfill for one ticker).
+All provider calls go through the shared rate limiter, so universe-wide runs
+are slow-but-safe on free tiers rather than bursty.
+
+Caching: facts that barely move — company profile, valuation metrics, the
+earnings calendar, short interest — carry a TTL (sentinel/data/cache.py) and
+are skipped entirely while fresh. That is what lets the universe grow without
+the rate-limit budget growing with it. Pass `force=True` to ignore the TTL
+(used by the manual "re-ingest everything" button).
 """
 
 from datetime import UTC, date, datetime, timedelta
@@ -15,6 +21,14 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from sentinel.data.cache import (
+    TTL_EARNINGS_CALENDAR,
+    TTL_FUNDAMENTALS,
+    TTL_SHORT_INTEREST,
+    cache_key,
+    is_fresh,
+    mark_fresh,
+)
 from sentinel.data.universe import MARKET_SYMBOLS, get_universe
 from sentinel.db.models import (
     BarRow,
@@ -25,6 +39,7 @@ from sentinel.db.models import (
     MacroSeriesRow,
     NewsItemRow,
     QuoteLatest,
+    ShortInterestRow,
     SystemEvent,
 )
 from sentinel.providers.base import ProviderError, ProviderUnavailable
@@ -32,6 +47,7 @@ from sentinel.providers.macro.fred import CORE_SERIES
 from sentinel.providers.registry import (
     CredentialsMissing,
     build_filings,
+    build_institutional,
     build_macro,
     build_market_data,
     build_research,
@@ -164,14 +180,28 @@ def ingest_news(db: Session, days: int = 3, symbols: list[str] | None = None) ->
     return count
 
 
-def ingest_fundamentals(db: Session, symbols: list[str] | None = None) -> int:
+def ingest_fundamentals(
+    db: Session, symbols: list[str] | None = None, force: bool = False
+) -> int:
+    """Company profile + valuation metrics, cached for a week per symbol.
+
+    Sector, market cap, PE, beta and the 52-week range do not move enough
+    between Tuesday and Wednesday to be worth a call each — and these are the
+    per-symbol calls that dominate free-tier rate limits. Returns the number
+    of symbols actually fetched; skipped ones are not counted.
+    """
     try:
         research = build_research(db)
     except CredentialsMissing as exc:
         _log(db, "ingest.fundamentals", str(exc), level="WARN")
         return 0
     count = 0
+    skipped = 0
     for symbol in symbols or _universe(db):
+        key = cache_key("fundamentals", symbol)
+        if not force and is_fresh(db, key):
+            skipped += 1
+            continue
         values: dict = {"symbol": symbol, "as_of": datetime.now(UTC)}
         try:
             profile = research.company_profile(symbol)
@@ -207,12 +237,24 @@ def ingest_fundamentals(db: Session, symbols: list[str] | None = None) -> int:
             .on_conflict_do_update(index_elements=["symbol"], set_=values)
         )
         db.execute(stmt)
+        mark_fresh(db, key, TTL_FUNDAMENTALS, kind="fundamentals")
         count += 1
-    _log(db, "ingest.fundamentals", f"{count} symbols")
+    _log(
+        db,
+        "ingest.fundamentals",
+        f"{count} symbols fetched, {skipped} served from cache",
+    )
     return count
 
 
-def ingest_earnings_calendar(db: Session, horizon_days: int = 21) -> int:
+def ingest_earnings_calendar(
+    db: Session, horizon_days: int = 21, force: bool = False
+) -> int:
+    """Whole-market earnings calendar. One call, cached for the trading day."""
+    key = cache_key("earnings_calendar", str(horizon_days))
+    if not force and is_fresh(db, key):
+        _log(db, "ingest.earnings", "skipped: calendar still fresh")
+        return 0
     try:
         research = build_research(db)
     except CredentialsMissing as exc:
@@ -246,6 +288,7 @@ def ingest_earnings_calendar(db: Session, horizon_days: int = 21) -> int:
         )
         db.execute(stmt)
         count += 1
+    mark_fresh(db, key, TTL_EARNINGS_CALENDAR, kind="earnings_calendar")
     _log(db, "ingest.earnings", f"{count} events")
     return count
 
@@ -351,6 +394,53 @@ def ingest_insider_transactions(db: Session, symbols: list[str] | None = None) -
             db.execute(stmt)
             count += 1
     _log(db, "ingest.insiders", f"{count} transactions")
+    return count
+
+
+def ingest_short_interest(db: Session, symbols: list[str] | None = None) -> int:
+    """Fintel short-interest snapshots. Deliberately scoped to `symbols`
+    (the day's scan set) rather than defaulting to the full ~500-name
+    universe like ingest_insider_transactions does: Fintel's plan-tier rate
+    limits aren't publicly documented, so this defaults to the smaller,
+    safer footprint. Pass an explicit wider `symbols` list once you've
+    confirmed your plan can sustain a full-universe sweep."""
+    try:
+        institutional = build_institutional(db)
+    except CredentialsMissing as exc:
+        _log(db, "ingest.short_interest", str(exc), level="WARN")
+        return 0
+    count = 0
+    for symbol in symbols or []:
+        if symbol in MARKET_SYMBOLS:
+            continue
+        key = cache_key("short_interest", symbol)
+        if is_fresh(db, key):
+            continue  # published semi-monthly; a daily refetch buys nothing
+        try:
+            snap = institutional.short_interest(symbol)
+        except ProviderUnavailable:
+            continue
+        except ProviderError as exc:
+            _log(db, "ingest.short_interest", f"{symbol}: {exc}", level="ERROR")
+            continue
+        values = {
+            "symbol": snap.symbol,
+            "as_of": snap.as_of,
+            "short_percent_float": snap.short_percent_float,
+            "short_percent_shares_outstanding": snap.short_percent_shares_outstanding,
+            "days_to_cover": snap.days_to_cover,
+            "short_interest_change_pct": snap.short_interest_change_pct,
+            "dark_pool_short_volume_pct": snap.dark_pool_short_volume_pct,
+        }
+        stmt = (
+            pg_insert(ShortInterestRow)
+            .values(**values)
+            .on_conflict_do_update(index_elements=["symbol"], set_=values)
+        )
+        db.execute(stmt)
+        mark_fresh(db, key, TTL_SHORT_INTEREST, kind="short_interest")
+        count += 1
+    _log(db, "ingest.short_interest", f"{count} symbols")
     return count
 
 

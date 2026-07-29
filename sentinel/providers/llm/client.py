@@ -76,6 +76,22 @@ def cost_used_today(db: Session) -> float:
     return float(total or 0.0)
 
 
+def calls_made_today(db: Session) -> int:
+    """Attempted calls today, successful or not — retries count.
+
+    This is the backstop for the case the dollar meter can't catch: a model
+    whose pricing LiteLLM cannot compute reports $0.00 forever, so without a
+    count cap a runaway loop would never trip the budget.
+    """
+    since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    total = db.execute(
+        select(func.count(ApiUsage.id)).where(
+            ApiUsage.provider == "anthropic", ApiUsage.ts >= since
+        )
+    ).scalar_one_or_none()
+    return int(total or 0)
+
+
 def daily_cost_budget_usd() -> float:
     """Dollar cap from models.yaml policy; Settings value is the fallback."""
     policy = _load_models_config().get("policy") or {}
@@ -85,8 +101,17 @@ def daily_cost_budget_usd() -> float:
         return get_settings().llm_daily_cost_budget_usd
 
 
+def daily_call_budget() -> int:
+    """Hard call-count cap from models.yaml policy (0 = unlimited)."""
+    policy = _load_models_config().get("policy") or {}
+    try:
+        return int(policy["max_llm_calls_per_day"])
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
 def _check_budget(db: Session) -> None:
-    """Raise BudgetExceeded when today's spend (or the token backstop) is
+    """Raise BudgetExceeded when today's spend (or either backstop) is
     exhausted. Callers catch LLMError and fall back to deterministic output,
     so degraded mode activates automatically the moment the cap is hit."""
     cost_budget = daily_cost_budget_usd()
@@ -95,10 +120,38 @@ def _check_budget(db: Session) -> None:
         raise BudgetExceeded(
             f"daily cost budget exhausted (${cost_used:.4f}/${cost_budget:.2f})"
         )
+    call_budget = daily_call_budget()
+    if call_budget > 0:
+        calls = calls_made_today(db)
+        if calls >= call_budget:
+            raise BudgetExceeded(f"daily call budget exhausted ({calls}/{call_budget})")
     token_budget = get_settings().llm_daily_token_budget
     used = tokens_used_today(db)
     if used >= token_budget:
         raise BudgetExceeded(f"daily token budget exhausted ({used}/{token_budget})")
+
+
+def budget_status(db: Session) -> dict:
+    """Today's LLM spend vs every cap — surfaced in the System view."""
+    cost_budget = daily_cost_budget_usd()
+    call_budget = daily_call_budget()
+    token_budget = get_settings().llm_daily_token_budget
+    cost = cost_used_today(db)
+    calls = calls_made_today(db)
+    tokens = tokens_used_today(db)
+    return {
+        "cost_usd": round(cost, 6),
+        "cost_budget_usd": cost_budget,
+        "calls": calls,
+        "call_budget": call_budget,
+        "tokens": tokens,
+        "token_budget": token_budget,
+        "degraded": (
+            cost >= cost_budget
+            or (call_budget > 0 and calls >= call_budget)
+            or tokens >= token_budget
+        ),
+    }
 
 
 def _record_usage(

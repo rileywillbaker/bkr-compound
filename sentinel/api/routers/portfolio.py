@@ -11,8 +11,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from sentinel import DISCLAIMER
 from sentinel.db.base import get_db
 from sentinel.db.models import FundamentalsRow, Position, TradeRow
+from sentinel.portfolio.manager import PositionReview, review_positions
 from sentinel.portfolio.state import build_portfolio_state, cash_balance
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
@@ -121,3 +123,20 @@ def valuation(db: Session = Depends(get_db)) -> dict:
         "positions": positions,
         "sector_weights": sector_weights,
     }
+
+
+class PortfolioReview(BaseModel):
+    reviews: list[PositionReview]
+    disclaimer: str = DISCLAIMER
+
+
+@router.get("/review")
+def portfolio_review(db: Session = Depends(get_db)) -> PortfolioReview:
+    """Deterministic position management: hold, trim, tighten, add, or exit.
+
+    Zero AI cost — it runs in every operating mode including Free. Anything
+    that would ADD exposure was already put through the risk engine and is
+    absent here if the engine said no. These are recommendations for your own
+    decision; nothing is ever executed.
+    """
+    return PortfolioReview(reviews=review_positions(db))

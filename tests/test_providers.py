@@ -8,9 +8,12 @@ import respx
 
 from sentinel.providers.base import ProviderError, ProviderUnavailable
 from sentinel.providers.filings.edgar import EdgarFilings
+from sentinel.providers.institutional.fintel import FintelInstitutional
 from sentinel.providers.macro.fred import FredMacro
 from sentinel.providers.market_data.alpaca import AlpacaMarketData
 from sentinel.providers.research.finnhub import FinnhubResearch
+from sentinel.providers.research.yahoo import YahooOverview
+from sentinel.providers.screener.finviz import FinvizScreener
 
 
 @pytest.fixture(autouse=True)
@@ -203,3 +206,103 @@ def test_edgar_recent_filings():
     assert {f.form for f in filings} == {"8-K", "4"}
     assert filings[0].cik == "0001045810"
     assert "sec.gov/Archives" in filings[0].url
+
+
+# ----------------------------------------------------------------- Yahoo ----
+@respx.mock
+def test_yahoo_overview_parses_quote():
+    respx.get("https://fc.yahoo.com").mock(return_value=httpx.Response(200, text=""))
+    respx.get("https://query1.finance.yahoo.com/v1/test/getcrumb").mock(
+        return_value=httpx.Response(200, text="abc123crumb")
+    )
+    respx.get("https://query1.finance.yahoo.com/v7/finance/quote").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "quoteResponse": {
+                    "result": [
+                        {
+                            "regularMarketPrice": 101.5,
+                            "trailingPE": 30.2,
+                            "fiftyTwoWeekHigh": 150.0,
+                            "fiftyTwoWeekLow": 90.0,
+                            "targetMeanPrice": 130.0,
+                            "averageAnalystRating": "2.0 - Buy",
+                            "marketCap": 3_000_000_000,
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    yh = YahooOverview()
+    ov = yh.overview("NVDA")
+    assert ov.price == 101.5
+    assert ov.week52_high == 150.0
+    assert ov.market_cap == 3_000.0  # normalized to millions
+
+
+@respx.mock
+def test_yahoo_crumb_rejection_maps_to_unavailable():
+    respx.get("https://fc.yahoo.com").mock(return_value=httpx.Response(200, text=""))
+    respx.get("https://query1.finance.yahoo.com/v1/test/getcrumb").mock(
+        return_value=httpx.Response(401, text="")
+    )
+    yh = YahooOverview()
+    with pytest.raises(ProviderUnavailable):
+        yh.overview("NVDA")
+
+
+# ---------------------------------------------------------------- Finviz ----
+@respx.mock
+def test_finviz_export_parses_csv():
+    respx.get("https://elite.finviz.com/export").mock(
+        return_value=httpx.Response(
+            200,
+            text="Ticker,Company,Price,Change\nMU,Micron Technology,84.12,-1.5%\n",
+        )
+    )
+    fv = FinvizScreener("tok")
+    rows = fv.pullback_candidates()
+    assert rows[0].symbol == "MU"
+    assert rows[0].price == 84.12
+    assert rows[0].raw["Company"] == "Micron Technology"
+
+
+@respx.mock
+def test_finviz_bad_auth_returns_html_not_csv():
+    respx.get("https://elite.finviz.com/export").mock(
+        return_value=httpx.Response(200, text="<html>login required</html>")
+    )
+    fv = FinvizScreener("bad-token")
+    with pytest.raises(ProviderError):
+        fv.screen(["geo_usa"])
+
+
+# ---------------------------------------------------------------- Fintel ----
+@respx.mock
+def test_fintel_short_interest_parses():
+    respx.get("https://api.fintel.io/v1/ss/mu/short-interest").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "date": "2026-07-20",
+                "shortPctFloat": 22.5,
+                "daysToCover": 3.1,
+            },
+        )
+    )
+    fintel = FintelInstitutional("k")
+    snap = fintel.short_interest("MU")
+    assert snap.short_percent_float == 22.5
+    assert snap.days_to_cover == 3.1
+
+
+@respx.mock
+def test_fintel_missing_endpoint_maps_to_unavailable():
+    respx.get("https://api.fintel.io/v1/ss/mu/short-interest").mock(
+        return_value=httpx.Response(404, text="not found")
+    )
+    fintel = FintelInstitutional("k")
+    with pytest.raises(ProviderUnavailable):
+        fintel.short_interest("MU")
