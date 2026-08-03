@@ -208,6 +208,33 @@ def test_no_holdings_data_is_not_treated_as_no_accumulation(db):
     assert "no free holdings data" in component.detail
 
 
+def test_one_snapshot_is_distinguished_from_no_holdings(db):
+    """Accumulation is a DIFF. Having today's holdings but no prior snapshot
+    is a third state, and must not read as 'no data' or 'no buying'."""
+    seed_bars(db, "SPY", start=400.0, drift=0.1)
+    for etf_ticker in URANIUM.etfs:
+        seed_bars(db, etf_ticker, start=30.0, drift=0.2)
+    seed_holdings(db, "URA", {"CCJ": 20.0, "UEC": 4.0}, days_ago=0)
+
+    result = _score(db, theme=URANIUM)
+    component = result.component("etf_activity")
+    assert component is not None
+    assert "needs a second snapshot" in component.detail
+
+
+def test_two_snapshots_with_no_increase_says_so(db):
+    seed_bars(db, "SPY", start=400.0, drift=0.1)
+    for etf_ticker in URANIUM.etfs:
+        seed_bars(db, etf_ticker, start=30.0, drift=0.2)
+    seed_holdings(db, "URA", {"CCJ": 20.0}, days_ago=30)
+    seed_holdings(db, "URA", {"CCJ": 20.0}, days_ago=0)
+
+    result = _score(db, theme=URANIUM)
+    component = result.component("etf_activity")
+    assert component is not None
+    assert "no meaningful increase" in component.detail
+
+
 # ---------------------------------------------------------- persistence ----
 def test_persistence_bonus_requires_history(db):
     assert scoring.persistence_bonus(db, "nuclear", date.today(), 70.0) == 0.0

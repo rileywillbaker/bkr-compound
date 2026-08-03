@@ -65,7 +65,7 @@ There are two hand-off points into the existing system:
 | Reddit | public `.json`, unauthenticated | throttled, paced hard |
 | StockTwits | free v2 endpoints | throttled, progressively locked down |
 | **X / Twitter** | **none** | see below |
-| ETF holdings | issuer CSVs (ARK, Global X, iShares) | best effort |
+| ETF holdings | issuer files (ARK, Global X, iShares) | 13/14 verified 2026-08-02 |
 | ETF flow proxy | our own bars | **always available** |
 
 ### X / Twitter is deliberately absent
@@ -91,8 +91,26 @@ Real creation/redemption data is a paid product. So:
    answers *"what uranium companies are ETFs increasing exposure to?"*, as
    opposed to merely "what do they hold?".
 
-An empty accumulation list means **"no free holdings data"**, never "no
-accumulation". The report says which basis it used.
+Each issuer publishes differently, so retrieval is per-issuer (one shared
+parser):
+
+| Issuer | How | Note |
+|---|---|---|
+| ARK | direct, stable CSV link | ARKQ, ARKX |
+| iShares | `/us/products/{id}/{slug}/latest-holdings.csv` | product ids from iShares' own screener; the slug is ignored for routing but *is* part of the CDN cache key, and some cached objects are the header-only empty file — so a couple of equivalent spellings are tried until one parses |
+| Global X | fund page → dated CDN CSV | the filename embeds the holdings date, so it cannot be constructed and must be read off the page |
+
+Accumulation is a **diff**, so three states are reported distinctly and must
+not be confused: *no free holdings data*, *holdings tracked but only one
+snapshot so far*, and *two-plus snapshots showing no increase*. An empty
+accumulation list never means "no accumulation".
+
+**Known limitation.** Thematic ETFs frequently hold the *foreign* line of a
+company — URA holds Cameco as `CCO CN`, not `CCJ`. Those rows are correctly
+rejected (we cannot trade them), which means accumulation in a US-listed name
+is invisible whenever the fund holds it abroad. The US-listed subset still
+comes through (URA yields UEC, LEU, OKLO and others). Mapping cross-listings
+by company name would close this and is not yet done.
 
 ### Degradation contract
 

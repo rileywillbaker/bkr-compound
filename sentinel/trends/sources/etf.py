@@ -21,16 +21,21 @@ theme falls back to its taxonomy constituents and the report says which basis
 it used, rather than presenting a guess as a measurement.
 
 The holdings endpoints below are public download links intended for investors;
-they are fetched at a polite pace, once a day. iShares product identifiers are
-part of the public URL scheme and are marked `verified=False` where they have
-not been confirmed against a live response on this machine — an unverified
-endpoint that 404s simply contributes nothing.
+they are fetched at a polite pace, once a day. Each was confirmed against a
+live response on 2026-08-02 — see `verified`. An endpoint that stops working
+simply contributes nothing, and the theme falls back to the bar-based proxy.
+
+Each issuer publishes differently, so retrieval is per-issuer rather than one
+URL template: ARK links a stable CSV directly, iShares serves
+`latest-holdings.csv` under a product id, and Global X puts a DATED file on a
+CDN whose name has to be read off the fund page. Three strategies, one parser.
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import date
 
 import structlog
@@ -54,9 +59,21 @@ class HoldingRecord(BaseModel):
 
 
 class HoldingsEndpoint(BaseModel):
+    """How to reach one ETF's published holdings.
+
+    Each issuer exposes them differently, so `issuer` selects the retrieval
+    strategy rather than just labelling the row:
+
+      ark      `url` is a direct, stable CSV link.
+      ishares  `product_id` addresses /us/products/{id}/{slug}/latest-holdings.csv.
+      globalx  the CSV lives on a CDN under a DATED filename, so the fund page
+               is read first to discover the current link.
+    """
+
     etf: str
-    url: str
     issuer: str
+    url: str = ""  # ark only
+    product_id: str = ""  # ishares only
     verified: bool = False
 
 
@@ -64,15 +81,28 @@ class HoldingsEndpoint(BaseModel):
 # reliable free holdings source in the industry.
 _ARK = "https://assets.ark-funds.com/fund-documents/funds-etf-csv"
 
-# Global X exposes a full-holdings CSV download on each fund page.
-_GLOBALX = "https://www.globalxetfs.com/funds/{slug}/?download_full_holdings=true"
-
-# iShares' public holdings download. The numeric segment is the fund's product
-# id in iShares' own URL scheme.
-_ISHARES = (
-    "https://www.ishares.com/us/products/{product_id}/fund/1467271812596.ajax"
-    "?fileType=csv&fileName={etf}_holdings&dataType=fund"
+# Global X fund page. The page itself is not the CSV — it CONTAINS a link to
+# one on the issuer's CDN whose filename embeds the holdings date, so the
+# filename cannot be constructed and must be read from the page.
+_GLOBALX_PAGE = "https://www.globalxetfs.com/funds/{slug}/"
+_GLOBALX_CSV_RE = re.compile(
+    r"https://assets\.globalxetfs\.com/funds/holdings/[a-z0-9\-]+_full-holdings_\d{8}\.csv",
+    re.IGNORECASE,
 )
+
+# iShares' current public holdings download. Product ids come from iShares'
+# own product screener and are stable; the {slug} segment is NOT used for
+# routing (see _ISHARES_SLUGS).
+_ISHARES = "https://www.ishares.com/us/products/{product_id}/{slug}/latest-holdings.csv"
+
+# The slug is ignored when resolving the fund, but it IS part of the CDN cache
+# key — and some cached objects are the header-only "empty" version of the
+# file. Verified 2026-08-02: product 239502 (ITA) returns 52 holdings under
+# slug "x" and an empty file under slug "fund", reproducibly, while ICLN is
+# the other way round. Trying a couple of equivalent spellings of the same
+# public document reaches a populated entry; it is not an attempt to evade
+# anything, and each attempt stops at the first file that actually parses.
+_ISHARES_SLUGS: tuple[str, ...] = ("fund", "x", "holdings")
 
 HOLDINGS_ENDPOINTS: tuple[HoldingsEndpoint, ...] = (
     HoldingsEndpoint(
@@ -87,23 +117,22 @@ HOLDINGS_ENDPOINTS: tuple[HoldingsEndpoint, ...] = (
         verified=True,
         url=f"{_ARK}/ARK_SPACE_EXPLORATION_%26_INNOVATION_ETF_ARKX_HOLDINGS.csv",
     ),
-    HoldingsEndpoint(etf="URA", issuer="globalx", url=_GLOBALX.format(slug="ura")),
-    HoldingsEndpoint(etf="LIT", issuer="globalx", url=_GLOBALX.format(slug="lit")),
-    HoldingsEndpoint(etf="BOTZ", issuer="globalx", url=_GLOBALX.format(slug="botz")),
-    HoldingsEndpoint(etf="BUG", issuer="globalx", url=_GLOBALX.format(slug="bug")),
-    HoldingsEndpoint(etf="AIQ", issuer="globalx", url=_GLOBALX.format(slug="aiq")),
-    HoldingsEndpoint(
-        etf="ITA", issuer="ishares", url=_ISHARES.format(product_id="239502", etf="ITA")
-    ),
-    HoldingsEndpoint(
-        etf="ICLN", issuer="ishares", url=_ISHARES.format(product_id="239738", etf="ICLN")
-    ),
-    HoldingsEndpoint(
-        etf="SOXX", issuer="ishares", url=_ISHARES.format(product_id="239705", etf="SOXX")
-    ),
-    HoldingsEndpoint(
-        etf="IHAK", issuer="ishares", url=_ISHARES.format(product_id="307352", etf="IHAK")
-    ),
+    # Global X — all verified live 2026-08-02.
+    HoldingsEndpoint(etf="URA", issuer="globalx", verified=True),
+    HoldingsEndpoint(etf="LIT", issuer="globalx", verified=True),
+    HoldingsEndpoint(etf="BOTZ", issuer="globalx", verified=True),
+    HoldingsEndpoint(etf="BUG", issuer="globalx", verified=True),
+    HoldingsEndpoint(etf="AIQ", issuer="globalx", verified=True),
+    HoldingsEndpoint(etf="COPX", issuer="globalx", verified=True),
+    # iShares — product ids resolved from the issuer's own product screener
+    # and confirmed live 2026-08-02. SOXX returns a header-only file under
+    # every slug; that is upstream, and it simply contributes nothing.
+    HoldingsEndpoint(etf="ITA", issuer="ishares", product_id="239502", verified=True),
+    HoldingsEndpoint(etf="ICLN", issuer="ishares", product_id="239738", verified=True),
+    HoldingsEndpoint(etf="IHAK", issuer="ishares", product_id="307352", verified=True),
+    HoldingsEndpoint(etf="PICK", issuer="ishares", product_id="239655", verified=True),
+    HoldingsEndpoint(etf="IFRA", issuer="ishares", product_id="294315", verified=True),
+    HoldingsEndpoint(etf="SOXX", issuer="ishares", product_id="239705", verified=False),
 )
 
 # Column headers vary by issuer; these are the aliases seen in practice.
@@ -183,13 +212,65 @@ def parse_holdings_csv(body: str, etf: str) -> list[HoldingRecord]:
     return records
 
 
+def _fetch_direct(endpoint: HoldingsEndpoint) -> list[HoldingRecord]:
+    """ARK: a stable, direct CSV link."""
+    body = fetch(endpoint.url, provider="etf_issuer")
+    return parse_holdings_csv(body, endpoint.etf) if body else []
+
+
+def _fetch_ishares(endpoint: HoldingsEndpoint) -> list[HoldingRecord]:
+    """iShares: latest-holdings.csv, retried across equivalent slugs.
+
+    Stops at the first response that actually contains holdings, so the common
+    case is a single request. See _ISHARES_SLUGS for why more than one URL
+    spelling is needed.
+    """
+    for slug in _ISHARES_SLUGS:
+        body = fetch(
+            _ISHARES.format(product_id=endpoint.product_id, slug=slug),
+            provider="etf_issuer",
+        )
+        if not body:
+            continue
+        records = parse_holdings_csv(body, endpoint.etf)
+        if records:
+            return records
+    return []
+
+
+def _fetch_globalx(endpoint: HoldingsEndpoint) -> list[HoldingRecord]:
+    """Global X: read the fund page, then follow the dated CDN link it names."""
+    page = fetch(
+        _GLOBALX_PAGE.format(slug=endpoint.etf.lower()), provider="etf_issuer"
+    )
+    if not page:
+        return []
+    match = _GLOBALX_CSV_RE.search(page)
+    if match is None:
+        log.info("globalx: no holdings link on fund page", etf=endpoint.etf)
+        return []
+    body = fetch(match.group(0), provider="etf_issuer")
+    return parse_holdings_csv(body, endpoint.etf) if body else []
+
+
+_FETCHERS = {
+    "ark": _fetch_direct,
+    "ishares": _fetch_ishares,
+    "globalx": _fetch_globalx,
+}
+
+
 def fetch_holdings(endpoint: HoldingsEndpoint) -> list[HoldingRecord]:
     """Download and parse one ETF's holdings. Empty list on any failure."""
-    body = fetch(endpoint.url, provider="etf_issuer")
-    if body is None:
+    fetcher = _FETCHERS.get(endpoint.issuer, _fetch_direct)
+    try:
+        records = fetcher(endpoint)
+    except Exception:
+        log.exception("etf holdings fetch failed", etf=endpoint.etf, issuer=endpoint.issuer)
         return []
-    records = parse_holdings_csv(body, endpoint.etf)
     if not records:
+        # Expected and harmless: an issuer serving an empty file today means
+        # "no free holdings data", which scoring already reports honestly.
         log.info("etf holdings empty", etf=endpoint.etf, issuer=endpoint.issuer)
     return records
 

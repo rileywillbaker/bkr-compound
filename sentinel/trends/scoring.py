@@ -320,6 +320,25 @@ def etf_accumulation(
     return sorted(out, key=lambda a: -(a.weight_change or 0))
 
 
+def holdings_snapshot_count(db: Session, etfs: list[str]) -> int:
+    """How many distinct snapshot dates we hold for these ETFs.
+
+    Distinguishes three genuinely different situations that would otherwise
+    all read as "no accumulation": no holdings data at all, holdings tracked
+    but only one snapshot so far (accumulation is a DIFF and needs two), and
+    two-plus snapshots showing no increase.
+    """
+    if not etfs:
+        return 0
+    return len(
+        db.execute(
+            select(EtfHoldingRow.as_of)
+            .where(EtfHoldingRow.etf.in_([e.upper() for e in etfs]))
+            .distinct()
+        ).scalars().all()
+    )
+
+
 def etf_members(db: Session, etfs: list[str], limit_per_etf: int = 60) -> set[str]:
     """Current constituents of the given ETFs, from the newest snapshot."""
     if not etfs:
@@ -514,7 +533,10 @@ def _score_market(read: market.ThemeMarketRead, weight: float) -> ComponentScore
 
 
 def _score_etf(
-    read: market.ThemeMarketRead, accumulation: list[Accumulation], weight: float
+    read: market.ThemeMarketRead,
+    accumulation: list[Accumulation],
+    weight: float,
+    snapshots: int = 0,
 ) -> ComponentScore:
     if not read.etfs:
         return ComponentScore(
@@ -548,6 +570,12 @@ def _score_etf(
     if accumulation:
         names = ", ".join(sorted({a.symbol for a in accumulation})[:6])
         detail_parts.append(f"holdings increased in {names}")
+    elif snapshots >= 2:
+        detail_parts.append("published holdings show no meaningful increase")
+    elif snapshots == 1:
+        detail_parts.append(
+            "holdings tracked from today — accumulation needs a second snapshot"
+        )
     else:
         detail_parts.append("no free holdings data — price/volume proxy only")
 
@@ -779,7 +807,12 @@ def score_theme(
         _score_news(theme, corpus, weights["news_momentum"]),
         _score_policy(theme, corpus, weights["policy_support"], gov_covered),
         _score_market(read, weights["market_confirmation"]),
-        _score_etf(read, accumulation, weights["etf_activity"]),
+        _score_etf(
+            read,
+            accumulation,
+            weights["etf_activity"],
+            snapshots=holdings_snapshot_count(db, list(theme.etfs)),
+        ),
         _score_social(theme, corpus, growth, weights["social_attention"], social_covered),
         _score_breadth(read, weights["breadth"]),
     ]

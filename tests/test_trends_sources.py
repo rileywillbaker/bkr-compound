@@ -253,3 +253,86 @@ def test_store_holdings_is_idempotent_within_a_day(db):
 
 def test_tracked_etfs_are_not_empty():
     assert len(etf.tracked_etfs()) > 10
+
+
+# --------------------------------------------- per-issuer retrieval ----
+def _endpoint(issuer: str, **kw) -> etf.HoldingsEndpoint:
+    return etf.HoldingsEndpoint(etf=kw.pop("etf", "ITA"), issuer=issuer, **kw)
+
+
+def test_ark_uses_the_direct_url(monkeypatch):
+    seen = []
+
+    def fake_fetch(url, provider="rss", **kw):
+        seen.append(url)
+        return ARK_CSV
+
+    monkeypatch.setattr(etf, "fetch", fake_fetch)
+    records = etf.fetch_holdings(_endpoint("ark", etf="ARKQ", url="https://ark.test/a.csv"))
+    assert [r.symbol for r in records] == ["TSLA", "NVDA"]
+    assert seen == ["https://ark.test/a.csv"]
+
+
+def test_ishares_stops_at_the_first_populated_slug(monkeypatch):
+    """The slug is part of the CDN cache key and some entries hold an empty
+    file, so a populated one has to be found — but only until it is."""
+    calls = []
+
+    def fake_fetch(url, provider="rss", **kw):
+        calls.append(url)
+        # First spelling returns the header-only file, second the real one.
+        return ISHARES_CSV if len(calls) >= 2 else "Fund Holdings as of,Jul 15\n"
+
+    monkeypatch.setattr(etf, "fetch", fake_fetch)
+    records = etf.fetch_holdings(_endpoint("ishares", etf="ITA", product_id="239502"))
+    assert {r.symbol for r in records} >= {"LMT", "RTX"}
+    assert len(calls) == 2  # stopped as soon as it worked
+    assert all("239502" in url and "latest-holdings.csv" in url for url in calls)
+
+
+def test_ishares_gives_up_after_every_slug(monkeypatch):
+    monkeypatch.setattr(etf, "fetch", lambda url, provider="rss", **kw: "junk,header\n1,2\n")
+    assert etf.fetch_holdings(_endpoint("ishares", product_id="239502")) == []
+
+
+def test_globalx_follows_the_dated_cdn_link(monkeypatch):
+    """The CDN filename embeds the holdings date, so it cannot be constructed
+    and must be read off the fund page."""
+    csv_url = "https://assets.globalxetfs.com/funds/holdings/ura_full-holdings_20260731.csv"
+    page = f'<a href="{csv_url}"><button>Full Holdings (.csv)</button></a>'
+    seen = []
+
+    def fake_fetch(url, provider="rss", **kw):
+        seen.append(url)
+        # The CDN host also contains "/funds/", so discriminate on the host.
+        return ARK_CSV if url.startswith("https://assets.") else page
+
+    monkeypatch.setattr(etf, "fetch", fake_fetch)
+    records = etf.fetch_holdings(_endpoint("globalx", etf="URA"))
+    assert [r.symbol for r in records] == ["TSLA", "NVDA"]
+    assert seen[0].endswith("/funds/ura/")
+    assert seen[1] == csv_url
+
+
+def test_globalx_degrades_when_the_page_has_no_link(monkeypatch):
+    monkeypatch.setattr(etf, "fetch", lambda url, provider="rss", **kw: "<html>no link</html>")
+    assert etf.fetch_holdings(_endpoint("globalx", etf="URA")) == []
+
+
+def test_fetch_holdings_never_raises(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("issuer exploded")
+
+    monkeypatch.setattr(etf, "fetch", boom)
+    for issuer in ("ark", "ishares", "globalx"):
+        assert etf.fetch_holdings(_endpoint(issuer, product_id="1", url="https://x.test")) == []
+
+
+def test_every_endpoint_declares_what_it_needs():
+    """A misconfigured row would silently fetch nothing forever."""
+    for endpoint in etf.HOLDINGS_ENDPOINTS:
+        assert endpoint.issuer in etf._FETCHERS, endpoint.etf
+        if endpoint.issuer == "ark":
+            assert endpoint.url, endpoint.etf
+        if endpoint.issuer == "ishares":
+            assert endpoint.product_id.isdigit(), endpoint.etf
