@@ -90,10 +90,16 @@ _SYSTEM = (
 
 
 class TrendReviewPayload(BaseModel):
-    """Schema the model must satisfy. A category and prose — no numbers."""
+    """Schema the model must satisfy. A category and prose — no numbers.
+
+    The instruction asks for under 600 characters but the schema tolerates 800:
+    a validation failure costs a full retry (observed once on the first live
+    run), which is real money for a limit that exists only to keep the report
+    readable. The text is truncated to 600 on the way out regardless.
+    """
 
     verdict: TrendVerdict
-    assessment: str = Field(max_length=600)
+    assessment: str = Field(max_length=800)
     key_risks: list[str] = Field(default_factory=list)
 
 

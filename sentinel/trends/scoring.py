@@ -61,6 +61,10 @@ WEIGHTS: dict[str, float] = {
 # their information is.
 POLICY_THEME_SHIFT = 6.0
 
+# How many theme-matched articles must name a ticker before it counts as a
+# member of that theme. One is co-occurrence; three is a pattern.
+MIN_NEWS_MENTIONS = 3
+
 RECENT_WINDOW_DAYS = 3  # "now"
 BASELINE_WINDOW_DAYS = 21  # what "now" is compared against
 PERSISTENCE_WINDOW_DAYS = 10
@@ -721,9 +725,17 @@ def persistence_bonus(db: Session, theme_key: str, today: date, raw_score: float
 def theme_symbols(db: Session, theme: Theme, corpus: ThemeCorpus, limit: int = 40) -> list[str]:
     """The working constituent list for a theme.
 
-    Seeds ∪ ETF holdings ∪ tickers extracted from this theme's own news. The
-    third term is what lets a company that just won a contract be considered
-    even though nobody put it on a list beforehand.
+    Seeds ∪ ETF holdings ∪ tickers *repeatedly* mentioned in this theme's own
+    news. The third term is what lets a company that just won a contract be
+    considered even though nobody put it on a list beforehand.
+
+    That third term needs a floor. A single incidental mention is noise, not
+    membership: observed in the first live run, one passing reference pulled
+    Comcast into "defense and military spending", where it then ranked top on
+    a cheap P/E and was recommended with a dollar amount attached. Requiring
+    MIN_NEWS_MENTIONS independent theme-matched articles keeps the discovery
+    path open — a genuine new beneficiary gets written about more than once —
+    while excluding one-off co-occurrence.
     """
     from sentinel.data.universe import get_universe
 
@@ -735,7 +747,7 @@ def theme_symbols(db: Session, theme: Theme, corpus: ThemeCorpus, limit: int = 4
     members = {s.upper() for s in theme.seeds}
     members |= etf_members(db, list(theme.etfs))
     mentions = corpus.symbol_mentions.get(theme.key, {})
-    members |= set(mentions)
+    members |= {s for s, n in mentions.items() if n >= MIN_NEWS_MENTIONS}
 
     # ETFs are tracked for their flow proxy; they are never stock picks.
     members -= etf_set

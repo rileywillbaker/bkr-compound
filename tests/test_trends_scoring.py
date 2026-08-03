@@ -268,6 +268,44 @@ def test_symbol_theme_alignment_respects_threshold(db):
     assert strict == {}
 
 
+def test_single_news_mention_does_not_join_a_theme(db):
+    """Observed live: one passing article reference pulled Comcast into
+    "defense", where it then ranked top on a cheap P/E. One mention is
+    co-occurrence, not membership."""
+    seed_document(
+        db,
+        key="defense-incidental",
+        title="Pentagon official appears on CMCSA-owned network to discuss munitions",
+        themes=["defense"],
+        symbols=["CMCSA"],
+        days_ago=1.0,
+    )
+    symbols = scoring.theme_symbols(db, THEMES_BY_KEY["defense"], scoring.build_corpus(db))
+    assert "CMCSA" not in symbols
+
+
+def test_repeated_news_mentions_do_join_a_theme(db):
+    """The discovery path must stay open: a genuine new beneficiary gets
+    written about more than once."""
+    for i in range(scoring.MIN_NEWS_MENTIONS):
+        seed_document(
+            db,
+            key=f"defense-real-{i}",
+            title=f"Company wins Pentagon munitions contract award ({i})",
+            themes=["defense"],
+            symbols=["CMCSA"],
+            days_ago=1.0,
+        )
+    symbols = scoring.theme_symbols(db, THEMES_BY_KEY["defense"], scoring.build_corpus(db))
+    assert "CMCSA" in symbols
+
+
+def test_seeds_never_need_news_mentions(db):
+    """Seed membership is membership regardless of coverage."""
+    symbols = scoring.theme_symbols(db, THEMES_BY_KEY["defense"], scoring.build_corpus(db))
+    assert "LMT" in symbols
+
+
 def test_theme_symbols_exclude_tracked_etfs(db):
     """ETFs are flow evidence and must never become stock candidates."""
     seed_holdings(db, "URA", {"CCJ": 20.0, "URA": 1.0, "NXE": 3.0}, days_ago=0)

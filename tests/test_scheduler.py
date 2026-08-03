@@ -45,6 +45,64 @@ def test_exactly_three_core_scans_and_no_intraday(sched):
     }
 
 
+def test_trend_collect_ingests_etfs_and_off_universe_seeds(monkeypatch):
+    """Theme seeds outside the static universe (UEC, OKLO, IONQ, ...) are
+    ingested by nothing else. Without this the quality gate excludes them for
+    "not enough history" and whole themes can never produce a recommendation."""
+    from sentinel.data.universe import load_static_universe
+    from sentinel.trends.taxonomy import seed_symbols, thematic_etfs
+
+    requested: dict[str, list[str]] = {}
+
+    class _FakeIngest:
+        @staticmethod
+        def ingest_bars(db, timeframe="1Day", lookback_days=400, symbols=None):
+            requested["bars"] = list(symbols or [])
+            return 0
+
+        @staticmethod
+        def ingest_fundamentals(db, symbols=None, force=False):
+            requested["fundamentals"] = list(symbols or [])
+            return 0
+
+    import sentinel.data
+
+    # `from sentinel.data import ingest` binds the package ATTRIBUTE, so that
+    # is what has to be replaced — swapping sys.modules is too late.
+    monkeypatch.setattr(sentinel.data, "ingest", _FakeIngest)
+    monkeypatch.setattr(jobs, "_session", _NullSession)
+    monkeypatch.setattr(
+        "sentinel.trends.collect.collect_all", lambda db, **kw: None
+    )
+    monkeypatch.setattr("sentinel.trends.scoring.score_all", lambda db, **kw: [])
+
+    jobs._trend_collect_body()
+
+    universe = set(load_static_universe())
+    off_universe = set(seed_symbols()) - universe
+    assert off_universe, "taxonomy should contain names outside the static universe"
+    assert off_universe <= set(requested["bars"])
+    assert set(thematic_etfs()) <= set(requested["bars"])
+    # Fundamentals are only fetched for the names the universe doesn't cover.
+    assert set(requested["fundamentals"]) == off_universe
+
+
+class _NullSession:
+    """Context-manager stand-in for a DB session in scheduler unit tests."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+
 def test_trend_jobs_are_separate_and_correctly_ordered(sched):
     """Collection must run BEFORE the pre-market job so that job's discovery
     pass can consume today's trend snapshots; the report runs after the open

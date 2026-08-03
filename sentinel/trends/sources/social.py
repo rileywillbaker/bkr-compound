@@ -2,15 +2,25 @@
 
 What "free" actually allows, honestly stated:
 
-  **Reddit** — the public `.json` view of any subreddit listing is served
-  without authentication. Rate limits for anonymous clients are strict, so we
-  read one page per subreddit and pace hard. This is the primary social
-  source.
+  **Reddit** — the public `.json` view of any subreddit listing used to be
+  served without authentication. As of the 2026-08-02 live check it returns
+  **403 to every User-Agent** (browser-style, Reddit's own recommended
+  `platform:appid:version` form, and a plain token alike), so in practice this
+  collector now contributes nothing. It is kept because the block is
+  IP-reputation-based and intermittent rather than a removal of the endpoint,
+  and because the never-raise contract means a dead source costs nothing.
+  Restoring it properly needs Reddit's OAuth app flow — free for personal
+  volumes, but it requires registering an app and storing a client id/secret,
+  which is a user decision, not something to assume. Do NOT attempt to evade
+  the block.
 
   **StockTwits** — the v2 API's trending and per-symbol streams are open
-  without a key, though the free tier is throttled aggressively and has been
-  progressively locked down. Treated as a bonus: when it answers we use it,
-  when it 403s the run continues.
+  without a key, though the free tier is throttled aggressively. Verified
+  working 2026-08-02. This is currently the *only* social source that answers,
+  which makes `collect_stocktwits_symbols` load-bearing rather than a bonus:
+  trending entries are titled "$XYZ is trending" and carry no theme
+  vocabulary, so only the per-symbol message bodies can attach a post to a
+  theme. `collect()` must therefore always be given symbols.
 
   **X / Twitter** — there is no free tier that permits reading public posts
   since the v2 API was closed to free access; the remaining options are paid

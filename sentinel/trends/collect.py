@@ -84,6 +84,43 @@ def known_symbols(db: Session) -> frozenset[str]:
     )
 
 
+def social_focus_symbols(db: Session, limit: int = 12) -> list[str]:
+    """The short symbol list worth spending throttled social calls on.
+
+    Collection runs before scoring, so this reads YESTERDAY's snapshots and
+    takes the leading names from the strongest themes — a deliberate one-day
+    lag, which is fine because a theme's constituents barely change day to day.
+
+    Falls back to one seed per theme on a cold install so the first run still
+    produces theme-attached social content. Round-robins across themes rather
+    than draining the top one, so a single dominant theme cannot consume the
+    whole budget.
+    """
+    from sentinel.trends.scoring import latest_snapshots
+    from sentinel.trends.taxonomy import THEMES
+
+    ranked: list[list[str]] = []
+    try:
+        for snapshot in latest_snapshots(db, limit=6):
+            symbols = [str(s).upper() for s in (snapshot.symbols or [])]
+            if symbols:
+                ranked.append(symbols)
+    except Exception:
+        log.exception("social focus lookup failed")
+
+    if not ranked:
+        ranked = [[t.seeds[0]] for t in THEMES if t.seeds]
+
+    out: list[str] = []
+    for index in range(limit):
+        for symbols in ranked:
+            if index < len(symbols) and symbols[index] not in out:
+                out.append(symbols[index])
+                if len(out) >= limit:
+                    return out
+    return out[:limit]
+
+
 def _enrich(
     item: FeedItem, allowed: frozenset[str], name_index: dict[str, str]
 ) -> tuple[list[str], list[str], float]:
@@ -277,7 +314,12 @@ def collect_all(
 
     if include_social:
         try:
-            found, sources = social.collect()
+            # Per-symbol streams matter as much as the trending list: a
+            # trending entry is titled "$XYZ is trending", which carries no
+            # theme vocabulary and so can never attach to a theme. The message
+            # bodies from a symbol's own stream do. Without this the social
+            # component is permanently unmeasurable even when StockTwits is up.
+            found, sources = social.collect(symbols=social_focus_symbols(db))
             items.extend(found)
             result.sources_answered.extend(sources)
         except Exception:

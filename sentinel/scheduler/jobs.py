@@ -259,22 +259,47 @@ def job_trend_collect() -> None:
 def _trend_collect_body() -> None:
     try:
         from sentinel.data import ingest as _ingest
+        from sentinel.data.universe import load_static_universe
         from sentinel.trends import collect, scoring
         from sentinel.trends.sources.etf import tracked_etfs
+        from sentinel.trends.taxonomy import seed_symbols
     except ImportError:
         return
 
-    # Thematic ETF bars power the free fund-flow proxy. They are ingested here
-    # rather than added to config/universe_*.csv on purpose: these tickers must
-    # never become stock recommendations, only market-activity evidence.
+    # --- data the trend agent needs and nothing else provides ---------------
+    # Two distinct gaps, both fatal to the feature if left unfilled:
+    #
+    # 1. Thematic ETF bars power the free fund-flow proxy. Ingested here rather
+    #    than added to config/universe_*.csv on purpose — those tickers must
+    #    stay market-activity evidence and never become stock recommendations.
+    # 2. Theme SEEDS outside the static universe (UEC, DNN, OKLO, LEU, IONQ,
+    #    RKLB, ...). Nothing else ingests them, so without this they have zero
+    #    bars and zero fundamentals, are excluded by the quality gate as
+    #    "not enough history", and whole themes — uranium above all — could
+    #    never produce a recommendation no matter how strongly they scored.
+    universe = set(load_static_universe())
+    etfs = tracked_etfs()
+    new_seeds = sorted(set(seed_symbols()) - universe)
+
     with _session() as db:
         try:
-            _ingest.ingest_bars(db, timeframe="1Day", symbols=tracked_etfs())
+            _ingest.ingest_bars(db, timeframe="1Day", symbols=sorted(set(etfs) | set(new_seeds)))
             db.commit()
         except Exception:
             db.rollback()
-            log.exception("thematic ETF bar ingest failed")
-            # scoring still works on the seed baskets — keep going
+            log.exception("trend bar ingest failed")
+            # scoring degrades to whatever bars exist — keep going
+
+    # Fundamentals are cached for a week per symbol (see ingest_fundamentals),
+    # so this is a once-weekly cost per name in practice, not a daily one.
+    with _session() as db:
+        try:
+            _ingest.ingest_fundamentals(db, symbols=new_seeds)
+            db.commit()
+            log.info("trend seed ingest", etfs=len(etfs), new_seeds=len(new_seeds))
+        except Exception:
+            db.rollback()
+            log.exception("trend seed fundamentals ingest failed")
 
     with _session() as db:
         try:

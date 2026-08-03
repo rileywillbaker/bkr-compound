@@ -136,6 +136,40 @@ def test_collectors_never_raise_when_everything_fails(monkeypatch, collector):
     assert sources == []
 
 
+def test_social_focus_falls_back_on_a_cold_install(db):
+    """First run has no snapshots, but per-symbol social calls must still be
+    aimed somewhere or the social component can never be measured."""
+    from sentinel.trends.collect import social_focus_symbols
+
+    focus = social_focus_symbols(db, limit=12)
+    assert 0 < len(focus) <= 12
+    assert len(focus) == len(set(focus))
+
+
+def test_social_focus_round_robins_across_themes(db):
+    """A single dominant theme must not consume the whole throttled budget."""
+    from datetime import date
+
+    from sentinel.db.models import TrendSnapshotRow
+    from sentinel.trends.collect import social_focus_symbols
+
+    db.add(
+        TrendSnapshotRow(
+            theme="uranium", day=date.today(), score=90.0, symbols=["CCJ", "UEC", "DNN", "NXE"]
+        )
+    )
+    db.add(
+        TrendSnapshotRow(
+            theme="defense", day=date.today(), score=80.0, symbols=["LMT", "RTX", "NOC"]
+        )
+    )
+    db.flush()
+
+    focus = social_focus_symbols(db, limit=4)
+    assert "CCJ" in focus and "LMT" in focus  # both themes represented
+    assert len(focus) == len(set(focus))
+
+
 def test_x_twitter_is_explicitly_unavailable():
     """No free read tier exists; the collector must report the gap, not fake it."""
     items, sources = social.collect_x()
