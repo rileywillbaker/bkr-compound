@@ -1,0 +1,47 @@
+﻿# Thematic ETFs tracked by the Trend Discovery Agent (sentinel/trends/).
+#
+# Deliberately NOT named universe_*.csv: sentinel/data/universe.py globs that
+# pattern, and these tickers must never become stock recommendations. They are
+# ingested for their BARS only, so ETF relative strength and dollar-volume
+# trend can act as a free proxy for thematic fund flows.
+symbol
+NLR
+URA
+URNM
+URNJ
+NUKZ
+BOTZ
+AIQ
+IRBO
+ARKQ
+ARKX
+CHAT
+ROBO
+SMH
+SOXX
+XSD
+PSI
+ITA
+PPA
+XAR
+SHLD
+HACK
+CIBR
+BUG
+IHAK
+ICLN
+TAN
+QCLN
+PBW
+FAN
+GRID
+XLU
+PAVE
+IFRA
+XLI
+QTUM
+UFO
+REMX
+LIT
+COPX
+PICK

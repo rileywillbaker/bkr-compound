@@ -47,6 +47,32 @@ def build_scheduler() -> BackgroundScheduler:
         max_instances=1,
         misfire_grace_time=4 * 3600,
     )
+    # Trend Discovery Agent (sentinel/trends/). Collection runs BEFORE the
+    # pre-market job so its discovery pass can consume today's trend
+    # snapshots; the report runs after the open scan, once prices have
+    # settled and the day's signals exist.
+    sched.add_job(
+        jobs.job_trend_collect,
+        "cron",
+        day_of_week="mon-fri",
+        hour=7,
+        minute=45,
+        id="trend_collect",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=4 * 3600,
+    )
+    sched.add_job(
+        jobs.job_trend_report,
+        "cron",
+        day_of_week="mon-fri",
+        hour=9,
+        minute=50,
+        id="trend_report",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=4 * 3600,
+    )
     sched.add_job(
         jobs.job_market_open_scan,
         "cron",

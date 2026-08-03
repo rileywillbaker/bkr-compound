@@ -37,6 +37,16 @@ BUDGETS: dict[str, tuple[int, int]] = {
     "fintel": (1, 1),
     # Unofficial endpoint; paced conservatively to reduce 429/999 responses.
     "yahoo": (1, 2),
+    # --- Trend Discovery Agent: free, keyless, public sources ------------
+    # None of these publish a rate limit for anonymous use, so each is paced
+    # like a polite human reader rather than to a documented ceiling. Being
+    # a courteous client is the price of a free source staying free.
+    "rss": (1, 1),  # public news/agency feeds (Yahoo, CNBC, Google News, ...)
+    "reddit": (1, 2),  # unauthenticated .json endpoints throttle hard
+    "stocktwits": (1, 3),  # free tier is ~200/hour and unforgiving
+    "federalregister": (2, 1),  # documented public API, generous
+    "usaspending": (1, 1),  # public API, heavier queries
+    "etf_issuer": (1, 2),  # issuer holdings files
 }
 
 

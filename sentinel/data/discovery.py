@@ -34,6 +34,12 @@ Triggers (each yields a scored DiscoveryEvent):
   finviz_screen     : Finviz Elite screen for a deep pullback, run across the
                       whole market in one call — the only trigger that can
                       surface a symbol outside the static universe entirely
+  trend_alignment   : the symbol belongs to a theme the Trend Discovery Agent
+                      (sentinel/trends/) currently scores as strong. This is
+                      the hand-off that puts a thematic name into the normal
+                      scan set, so it receives the same analysis → risk gate →
+                      portfolio treatment as any other candidate. Free: it
+                      reads the persisted trend snapshots, no new API calls
 
 A quality gate then drops anything the data shows to be a penny stock or too
 thin to trade before the list is capped. It fails OPEN on missing data — the
@@ -125,6 +131,7 @@ EventKind = Literal[
     "pullback_from_high",
     "elevated_short_interest",
     "finviz_screen",
+    "trend_alignment",
 ]
 
 
@@ -148,6 +155,9 @@ class DiscoveryParams(BaseModel):
     )  # above this it's more likely a broken business than a dip
     short_interest_min_pct: float = Field(default=15.0, ge=0)  # % of float, short
     finviz_pullback_min_pct: int = Field(default=30, ge=0)  # Finviz screen threshold
+    # Minimum trend strength (0-100) for a theme's constituents to be
+    # nominated by the Trend Discovery Agent. See sentinel/trends/.
+    trend_min_score: float = Field(default=55.0, ge=0, le=100)
 
     # --- momentum / trend family (all computed from stored bars) ---
     series_lookback_days: int = Field(default=400, ge=60)
@@ -667,6 +677,54 @@ def _elevated_short_interest(
     return events
 
 
+def _trend_alignment(
+    db: Session, universe: set[str], p: DiscoveryParams
+) -> list[DiscoveryEvent]:
+    """Symbols belonging to a theme the Trend Discovery Agent rates highly.
+
+    This is the hand-off from sentinel/trends/ into the normal funnel. It
+    reads only the persisted trend snapshots — no network, no LLM — so a
+    thematic name enters the scan set and then receives exactly the same
+    treatment as any other candidate, terminating in the same risk gate. The
+    trend agent gets to nominate; it never gets to approve.
+
+    Silently contributes nothing before the trend agent has run for the first
+    time, which keeps this trigger optional in the same way every other
+    provider-dependent trigger is.
+    """
+    try:
+        from sentinel.trends.scoring import symbol_theme_alignment
+    except ImportError:
+        return []
+    try:
+        alignment = symbol_theme_alignment(db, min_score=p.trend_min_score)
+    except Exception:
+        log.exception("trend alignment lookup failed")
+        return []
+
+    events = []
+    for symbol, themes in alignment.items():
+        if symbol not in universe or not themes:
+            continue
+        best_theme, best_score = max(themes, key=lambda pair: pair[1])
+        detail = f"exposed to '{best_theme}', scoring {best_score:.0f}/100 as a trend"
+        if len(themes) > 1:
+            detail += f" (and {len(themes) - 1} other tracked theme(s))"
+        events.append(
+            DiscoveryEvent(
+                symbol=symbol,
+                kind="trend_alignment",
+                detail=detail,
+                # Deliberately modest: a theme is a reason to LOOK at a name,
+                # never on its own a reason to buy it. The score tops out
+                # below the event-driven triggers (earnings, insider cluster)
+                # so a thematic name still has to earn its place.
+                score=min(1.8, 0.6 + (best_score - p.trend_min_score) / 40),
+            )
+        )
+    return events
+
+
 def _finviz_screen(
     db: Session, universe: set[str], p: DiscoveryParams
 ) -> list[DiscoveryEvent]:
@@ -764,6 +822,7 @@ def discover(db: Session, params: DiscoveryParams | None = None) -> DiscoveryRes
         _pullback_from_high,
         _elevated_short_interest,
         _finviz_screen,
+        _trend_alignment,
     ):
         try:
             events.extend(trigger(db, universe, p))

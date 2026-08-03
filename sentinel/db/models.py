@@ -414,3 +414,101 @@ class ShortInterestRow(Base):
     short_interest_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     dark_pool_short_volume_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
+# --------------------------------------------------------------------------
+# Trend discovery (sentinel/trends/) - all free, keyless sources
+# --------------------------------------------------------------------------
+class TrendDocumentRow(Base):
+    """One collected free-source document: a news headline, a government
+    press release / rule, or a social post.
+
+    Deduplicated on `doc_key` (a hash of source + canonical url/title) so
+    re-running collection during the day never double-counts a story into the
+    news-momentum score. `themes` holds the deterministic taxonomy matches and
+    `symbols` the extracted tickers, both computed at collection time so
+    scoring is a pure DB read.
+    """
+
+    __tablename__ = "trend_documents"
+    doc_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source: Mapped[str] = mapped_column(String(48), index=True)  # yahoo/cnbc/reddit/...
+    channel: Mapped[str] = mapped_column(String(16), index=True)  # news|gov|social
+    title: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    author: Mapped[str] = mapped_column(String(128), default="")
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    themes: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    symbols: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    sentiment: Mapped[float] = mapped_column(Float, default=0.0)  # -1..+1
+    engagement: Mapped[int] = mapped_column(Integer, default=0)  # upvotes/comments
+
+
+class EtfHoldingRow(Base):
+    """A thematic ETF's holding of one symbol on one date.
+
+    Snapshots are kept per as_of date (not overwritten) because the whole
+    point is the DIFF: weight/share changes between two snapshots are what
+    "ETFs are accumulating this name" actually means. Sourced from issuers
+    that publish holdings free of charge; absent that, a theme falls back to
+    its taxonomy constituents and the report says so.
+    """
+
+    __tablename__ = "etf_holdings"
+    etf: Mapped[str] = mapped_column(String(12), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True, index=True)
+    as_of: Mapped[date] = mapped_column(Date, primary_key=True)
+    weight_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
+class SocialMentionRow(Base):
+    """Daily per-symbol social aggregate. One row per (symbol, source, day),
+    so mention GROWTH is a two-row comparison rather than a re-scrape."""
+
+    __tablename__ = "social_mentions"
+    symbol: Mapped[str] = mapped_column(String(12), primary_key=True, index=True)
+    source: Mapped[str] = mapped_column(String(24), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
+    mentions: Mapped[int] = mapped_column(Integer, default=0)
+    sentiment: Mapped[float] = mapped_column(Float, default=0.0)  # mean, -1..+1
+    positive: Mapped[int] = mapped_column(Integer, default=0)
+    negative: Mapped[int] = mapped_column(Integer, default=0)
+    engagement: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
+class TrendSnapshotRow(Base):
+    """One theme's computed strength on one day, with its component
+    sub-scores kept so the score is always explainable rather than a
+    black box."""
+
+    __tablename__ = "trend_snapshots"
+    theme: Mapped[str] = mapped_column(String(48), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)  # 0-100
+    legitimacy: Mapped[str] = mapped_column(String(16), default="unproven")
+    components: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    symbols: Mapped[list | None] = mapped_column(JSON, nullable=True)  # ranked
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+
+
+class TrendReportRow(Base):
+    """The composed daily B-Quant Trend Report (payload + rendered text), so
+    the UI, the API and the alert channel all read the same artifact."""
+
+    __tablename__ = "trend_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=UTCNow)
+    market_environment: Mapped[str] = mapped_column(String(16), default="Neutral")
+    payload: Mapped[dict] = mapped_column(JSON)
+    text: Mapped[str] = mapped_column(Text, default="")
+    llm_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    alert_sent: Mapped[bool] = mapped_column(Boolean, default=False)

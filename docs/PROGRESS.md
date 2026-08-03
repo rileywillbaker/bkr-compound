@@ -148,6 +148,61 @@ Phase status per `claude-code-master-prompt.md` §10.
   build clean. Unchanged: no trade execution, risk engine purity and absolute
   veto, no LLM output in any trade parameter, NO TRADE as a first-class outcome.
   Deployment note: migration 0010 must run and the image be rebuilt.
+- 2026-08-02 — **Trend Discovery Agent** (`sentinel/trends/`, migration 0011,
+  docs/TREND_DISCOVERY.md). Finds emerging themes early from **free, keyless
+  sources only** and hands survivors to the existing agents rather than acting
+  on them. Fourteen themes in `taxonomy.py` (nuclear, uranium, AI, AI
+  regulation, robotics, defense, cybersecurity, semiconductors, clean energy,
+  power grid, infrastructure, quantum, space, critical minerals); adding one
+  needs no code change anywhere else.
+  (1) Sources: publisher RSS (Yahoo/CNBC/MarketWatch/Seeking Alpha/Investing/
+  Nasdaq) + per-theme Google News RSS search (the workhorse, and the only free
+  route to Reuters since it retired its feeds); Federal Register API and
+  USAspending API (both documented, free, no key — the best free policy signal
+  available) plus DoD/DOE/NRC/White House feeds; Reddit public `.json` and
+  StockTwits free endpoints. **X/Twitter returns nothing by design** — no free
+  read tier exists, and the report states the gap rather than faking or
+  scraping it.
+  (2) ETF activity has two signals: a flow proxy from our *own* bars (thematic
+  ETF relative strength + dollar-volume trend — always available, needs no
+  external source; `config/thematic_etfs.csv`, deliberately not matching the
+  `universe_*.csv` glob so ETFs never become stock picks), plus day-over-day
+  **diffs** of issuer-published holdings where free (ARK/Global X/iShares). An
+  empty diff means "no free holdings data", never "no accumulation".
+  (3) `sentiment.py` — offline finance-tuned lexicon (VADER grammar handling +
+  Loughran-McDonald vocabulary, implemented natively). No torch dependency, no
+  paid API, fully deterministic. ALL-CAPS emphasis ignores tickers/acronyms.
+  (4) Scoring: six weighted components where **action outweighs talk**
+  (market+policy 45 > news+social 32), plus an explicit hype guard that CAPS
+  the score (one-directional) when it finds the hype signature — social
+  dominating with no confirmation, one stock carrying the basket, narrow
+  breadth. A source that fails is *not covered* and leaves both numerator and
+  denominator, so a dead feed never reads as an absence of news.
+  (5) Ranking: quality gate (≥$5, ≥$10M turnover, ≥$500M cap, ≥120 bars, known
+  sector — fails CLOSED since this output carries a dollar amount) and a
+  pump-and-dump guard requiring the full signature *and* no earnings/8-K to
+  explain the move. Seven factors, with valuation ranked **within the theme's
+  peers** (an absolute PE cutoff would exclude every growth theme) and
+  competitive advantage labelled as the proxy it is.
+  (6) Agent hand-off: `trend_alignment` discovery trigger puts thematic names
+  into the normal scan set (scored below the event triggers — a theme is a
+  reason to look, not to buy); `allocation.py` converts a ranked idea to
+  dollars via `size_position()` → cash cap → the real risk engine → portfolio
+  context. Cash is capped in allocation, not as a new risk-engine rule, so the
+  pure module is untouched and the cap only ever shrinks a proposal.
+  (7) Cost: everything above is $0. The only paid step is one review call per
+  **theme** (never per ticker), ≤2/day in Smart, ≤4 in Research, **0 in Free**,
+  cached and one-directional. Free mode produces the complete report.
+  (8) Jobs at 07:45 ET (collect+score, before the 08:30 pre-market job so its
+  discovery pass sees fresh snapshots) and 09:50 ET (report). New `trends`
+  role in models.yaml, `/api/trends/*` router, Trends tab.
+  (9) `agent._with_proposed()` makes the recommendation basket **cumulative**:
+  each candidate is risk-checked against a portfolio already containing the
+  ones above it, so five names cannot each pass in isolation and together
+  breach the sector / correlation / gross-exposure limits. Verified: with a
+  25% sector cap the third same-sector name is refused on `max_sector_pct`.
+  132 trend tests (454 total, was 322), ruff/mypy clean, frontend build clean.
+  Deployment note: migration 0011 must run and the image be rebuilt.
 - 2026-07-07 — Pre-Docker smoke test: booted the real app (SQLite, TestClient)
   serving the real built SPA — 14/14 checks passed (health, SPA, auth,
   settings, encrypted+masked credentials, risk profile, manual trade +

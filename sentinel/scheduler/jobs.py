@@ -22,6 +22,18 @@ The SEPARATE swing book (sentinel/swing/) adds two of its own scans that do
 NOT touch the three core scans above: 09:45 ET (open) and 12:30 ET (midday),
 each running the swing pipeline with its own alert channel + daily cap.
 
+The Trend Discovery Agent (sentinel/trends/) adds two more:
+  - 07:45 ET : collect every free source (news, government, social, ETF
+               holdings) and score every theme. Runs BEFORE the 08:30
+               pre-market job on purpose, so that job's discovery pass can
+               read fresh trend snapshots through the `trend_alignment`
+               trigger and pull thematic names into the day's scan set.
+               No alerts, no LLM.
+  - 09:50 ET : compose and send the daily trend report, after the 09:30 scan
+               has produced the day's signals and prices have settled. This
+               is the only trend job that may spend on an LLM, and only in
+               smart/research mode, capped at a couple of theme reviews.
+
 Weekends are fully dark: every job is cron'd mon-fri AND double-checked by
 _weekend_or_closed(), so Saturdays/Sundays see no ingestion, no LLM calls,
 and no alerts even if a cron entry is misconfigured.
@@ -221,6 +233,91 @@ def job_swing_midday() -> None:
     _run_swing_scan()
 
 
+# The collection sweep hits dozens of free endpoints at a polite pace and can
+# run for several minutes; a boot run and the 07:45 run must not overlap and
+# halve each other's rate budget.
+_trend_collect_running = threading.Lock()
+
+
+def job_trend_collect() -> None:
+    """07:45 ET: gather free sources and score every theme. No alerts, no LLM.
+
+    Deliberately ordered before the 08:30 pre-market job so that job's
+    discovery pass sees today's trend snapshots.
+    """
+    if _weekend_or_closed():
+        return
+    if not _trend_collect_running.acquire(blocking=False):
+        log.warning("trend collection already running; skipping this run")
+        return
+    try:
+        _trend_collect_body()
+    finally:
+        _trend_collect_running.release()
+
+
+def _trend_collect_body() -> None:
+    try:
+        from sentinel.data import ingest as _ingest
+        from sentinel.trends import collect, scoring
+        from sentinel.trends.sources.etf import tracked_etfs
+    except ImportError:
+        return
+
+    # Thematic ETF bars power the free fund-flow proxy. They are ingested here
+    # rather than added to config/universe_*.csv on purpose: these tickers must
+    # never become stock recommendations, only market-activity evidence.
+    with _session() as db:
+        try:
+            _ingest.ingest_bars(db, timeframe="1Day", symbols=tracked_etfs())
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("thematic ETF bar ingest failed")
+            # scoring still works on the seed baskets — keep going
+
+    with _session() as db:
+        try:
+            collect.collect_all(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("trend collection failed")
+            return
+
+    with _session() as db:
+        try:
+            scoring.score_all(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("trend scoring failed")
+
+
+def job_trend_report() -> None:
+    """09:50 ET: build and send the daily B-Quant Trend Report.
+
+    The only trend job permitted to spend on an LLM, and only within the
+    operating mode's cap. Free mode produces the identical report structure
+    with no calls at all.
+    """
+    if _weekend_or_closed():
+        return
+    try:
+        from sentinel.trends.agent import generate_report
+        from sentinel.trends.report import send_report
+    except ImportError:
+        return
+    with _session() as db:
+        try:
+            report = generate_report(db)
+            send_report(db, report)
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("trend report failed")
+
+
 def job_watchdog() -> None:
     if _weekend_or_closed():
         return
@@ -275,6 +372,16 @@ def job_nightly_evaluation() -> None:
         except Exception:
             db.rollback()
             log.exception("cache purge failed")
+    with _session() as db:
+        try:
+            from sentinel.trends.collect import purge_old_documents
+
+            dropped = purge_old_documents(db)
+            db.commit()
+            log.info("trend document housekeeping", purged=dropped)
+        except Exception:
+            db.rollback()
+            log.exception("trend document purge failed")
 
 
 def _send_brief(kind: str) -> None:

@@ -27,6 +27,18 @@ Spec: `claude-code-master-prompt.md` (authoritative). Plan: see docs/PROGRESS.md
   or lower conviction, never raise it, and `reject` downgrades to NO_TRADE.
 - Free mode must remain structurally incapable of making a call.
 
+## Trend Discovery Agent (2026-08 — see docs/TREND_DISCOVERY.md)
+- `sentinel/trends/` uses **only free, keyless sources**. Never add a paid API,
+  subscription, or premium tier to it.
+- The LLM step is **one call per THEME, never per ticker** (`trends/review.py`),
+  capped by mode, cached, and one-directional (may only lower a score).
+- The trend agent **nominates, never approves**: every dollar amount goes
+  through `size_position()` and the real risk engine (`trends/allocation.py`).
+- A source that fails is *not covered* (excluded from the score) — never scored
+  as zero. Collectors must return `[]`, never raise.
+- `config/thematic_etfs.csv` is deliberately NOT named `universe_*.csv`: those
+  ETFs are ingested for bars only and must never become stock recommendations.
+
 ## Toolchain on this machine (not on PATH — use full paths)
 - Python venv: `.venv\Scripts\python.exe` (Python 3.12.10, per-user install at `%LOCALAPPDATA%\Programs\Python\Python312`)
 - Git: `C:\Users\riley\tools\git\cmd\git.exe`
@@ -40,7 +52,7 @@ Spec: `claude-code-master-prompt.md` (authoritative). Plan: see docs/PROGRESS.md
 - Stack: `docker compose up --build` (once Docker exists)
 
 ## Layout
-`sentinel/` Python package (providers/, data/, risk/, portfolio/, agents/, pipeline/, strategies/, swing/, evaluation/, alerts/, scheduler/, api/, db/) · `frontend/` React+Vite+Tailwind SPA · `alembic/` migrations · `tests/` pytest.
+`sentinel/` Python package (providers/, data/, risk/, portfolio/, agents/, pipeline/, strategies/, swing/, trends/, evaluation/, alerts/, scheduler/, api/, db/) · `frontend/` React+Vite+Tailwind SPA · `alembic/` migrations · `tests/` pytest.
 
 Cost-critical modules: `sentinel/modes.py` (operating modes) · `sentinel/data/cache.py` (TTL cache) · `sentinel/agents/review.py` (the one paid call) · `sentinel/pipeline/triggers.py` (event gating) · `sentinel/pipeline/graph.py` (the funnel).
 

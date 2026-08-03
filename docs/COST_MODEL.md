@@ -64,6 +64,38 @@ so consolidating them improved the judgement as well as the price.
 
 ---
 
+### The trend funnel
+
+The Trend Discovery Agent (`sentinel/trends/`, see `docs/TREND_DISCOVERY.md`)
+adds a second funnel with the same shape and the same rule.
+
+```
+Free sources        news RSS, Federal Register, USAspending, Reddit,
+    │               StockTwits, ETF holdings — all keyless
+    ▼  theme + ticker extraction        (regex over the whole corpus)
+    ▼  lexicon sentiment                (offline, no dependency)
+    ▼  trend scoring, all 14 themes     (arithmetic over stored rows)
+    ▼  hype guard                       (caps the score, one-directional)
+    ▼  quality gate + pump filter       (fails closed)
+    ▼  seven-factor stock ranking       (deterministic)
+    ▼  RISK ENGINE                      (sizing → cash cap → veto)
+    ▼  LLM THEME REVIEW  ≤2/day         ← the only spend, per THEME not ticker
+    ▼  report, in dollars
+```
+
+Everything above the review row is $0. The review is capped at 2 calls/day in
+Smart and 4 in Research, **0 in Free**, cached on a fingerprint of the material
+evidence, and one-directional: `confirms` keeps the score, `overstated` reduces
+it, `hype` reduces it further and forces the hype label. Free mode produces the
+complete report — every theme, score, ranked stock and dollar amount — with no
+calls at all.
+
+The rule this funnel exists to respect: collection and extraction run over
+*thousands* of documents a day, so they are exactly the stages that must never
+call a model.
+
+---
+
 ## 3. Operating modes
 
 Set in **Settings → Operating mode**. The mode governs *automatic* spend only;

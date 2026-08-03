@@ -1,7 +1,8 @@
 """Scheduler contract: exactly three CORE scans per trading day (08:30 / 09:30
 / 15:30 ET), no rolling intraday core scan, everything mon-fri, and a hard
 weekend guard inside the jobs themselves. The swing book adds its own two
-scans (09:45 / 12:30 ET), also mon-fri and weekend-guarded."""
+scans (09:45 / 12:30 ET), and the Trend Discovery Agent its own two jobs
+(07:45 collection / 09:50 report) — all also mon-fri and weekend-guarded."""
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -27,8 +28,9 @@ def sched():
 def test_exactly_three_core_scans_and_no_intraday(sched):
     ids = {job.id for job in sched.get_jobs()}
     assert "intraday_scan" not in ids  # the 15/30-min rolling core scan is gone
-    # The three core scans (unchanged) + support jobs. The swing book adds its
-    # own two scans separately (asserted below) without touching these.
+    # The three core scans (unchanged) + support jobs. The swing book and the
+    # trend agent add their own jobs separately (asserted below) without
+    # touching these three.
     assert ids == {
         "premarket_discovery",
         "market_open_scan",
@@ -38,7 +40,30 @@ def test_exactly_three_core_scans_and_no_intraday(sched):
         "nightly_eval",
         "swing_open",
         "swing_midday",
+        "trend_collect",
+        "trend_report",
     }
+
+
+def test_trend_jobs_are_separate_and_correctly_ordered(sched):
+    """Collection must run BEFORE the pre-market job so that job's discovery
+    pass can consume today's trend snapshots; the report runs after the open
+    scan, once prices have settled."""
+    times = {j.id: _fields(j) for j in sched.get_jobs()}
+    collect_at = (int(times["trend_collect"]["hour"]), int(times["trend_collect"]["minute"]))
+    premarket_at = (
+        int(times["premarket_discovery"]["hour"]),
+        int(times["premarket_discovery"]["minute"]),
+    )
+    report_at = (int(times["trend_report"]["hour"]), int(times["trend_report"]["minute"]))
+    open_scan_at = (
+        int(times["market_open_scan"]["hour"]),
+        int(times["market_open_scan"]["minute"]),
+    )
+    assert collect_at == (7, 45)
+    assert collect_at < premarket_at
+    assert report_at == (9, 50)
+    assert report_at > open_scan_at
 
 
 def test_swing_scans_are_separate(sched):
@@ -103,6 +128,8 @@ def test_weekend_scan_jobs_do_nothing(monkeypatch):
     jobs.job_nightly_evaluation()
     jobs.job_swing_open()
     jobs.job_swing_midday()
+    jobs.job_trend_collect()
+    jobs.job_trend_report()
 
 
 def test_open_scan_alerts_buy_only_close_scan_sell_only(monkeypatch):

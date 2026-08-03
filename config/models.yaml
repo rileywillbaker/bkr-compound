@@ -47,6 +47,23 @@ roles:
       #   api_base: http://localhost:11434
       #   max_tokens: 1024
 
+  trend_review:
+    # The Trend Discovery Agent's ONE optional call, made per THEME (never per
+    # ticker) and capped at a couple per day. It judges whether a theme's
+    # narrative is durable or a hype cycle, given evidence that was already
+    # computed deterministically — see sentinel/trends/review.py. Like the
+    # review role above, its answer is a category, and it can only make the
+    # system more conservative. Set to a cheaper candidate freely: it changes
+    # prose and a stance, never a number.
+    active: anthropic-trend-review
+    candidates:
+      anthropic-trend-review:
+        model: anthropic/claude-sonnet-4-6
+        max_tokens: 1024
+      # anthropic-trend-review-cheap:
+      #   model: anthropic/claude-haiku-4-5
+      #   max_tokens: 1024
+
   reasoning:
     active: anthropic-reasoning
     candidates:
